@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet, TextInput, Platform, StatusBar } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 
 const COLORS = {
@@ -15,13 +17,14 @@ const COLORS = {
   successGreen: '#22C55E',
 };
 
-export default function SeatExchangeScreen({ onBack }: { onBack: () => void }) {
+export default function SeatExchangeScreen() {
+  const navigation = useNavigation();
   const [isVerified, setIsVerified] = useState(false);
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={onBack} style={styles.backButton}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
           <Feather name="arrow-left" size={24} color={COLORS.white} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>SEAT EXCHANGE</Text>
@@ -70,7 +73,7 @@ export default function SeatExchangeScreen({ onBack }: { onBack: () => void }) {
           <VerifiedSeatExchangeView />
         )}
       </ScrollView>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -226,7 +229,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
   header: {
     backgroundColor: COLORS.primary,
-    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 24) + 16 : 16,
+    paddingTop: 16,
     paddingBottom: 24,
     paddingHorizontal: 16,
     flexDirection: 'row',

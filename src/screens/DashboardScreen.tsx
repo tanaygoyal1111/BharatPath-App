@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, SafeAreaView, Dimensions, StatusBar, Platform, Modal } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Dimensions, StatusBar, Platform, Modal, ActivityIndicator } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
 import OfflineDashboard from './OfflineDashboard';
-import HelpScreen from './HelpScreen';
-import SeatExchangeScreen from './SeatExchangeScreen';
+import { useJourneyData } from '../hooks/useJourneyData';
 
 const { width } = Dimensions.get('window');
 
@@ -25,10 +26,13 @@ const COLORS = {
 };
 
 export default function Dashboard() {
+  const navigation = useNavigation<any>();
   const [isOffline, setIsOffline] = useState(true);
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [targetState, setTargetState] = useState(true);
-  const [currentTab, setCurrentTab] = useState<'home' | 'help' | 'exchange'>('home');
+
+  // Injecting our Data Fetching Hook
+  const { data, isLoading } = useJourneyData(isOffline);
 
   const handleNetworkSwitch = (toOffline: boolean) => {
     setTargetState(toOffline);
@@ -42,19 +46,13 @@ export default function Dashboard() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar 
-        barStyle={currentTab !== 'home' ? 'dark-content' : 'light-content'} 
-        backgroundColor={currentTab !== 'home' ? '#F8F9FA' : (isOffline ? COLORS.textDark : COLORS.primary)} 
+        barStyle={isOffline ? 'light-content' : 'dark-content'} 
+        backgroundColor={isOffline ? COLORS.textDark : COLORS.primary} 
       />
       <View style={styles.container}>
         
-        {currentTab === 'help' ? (
-          <HelpScreen onBack={() => setCurrentTab('home')} />
-        ) : currentTab === 'exchange' ? (
-          <SeatExchangeScreen onBack={() => setCurrentTab('home')} />
-        ) : (
-          <>
-            {/* Dynamic Header */}
-            <View style={isOffline ? styles.headerOffline : styles.headerOnline}>
+        {/* Dynamic Header */}
+        <View style={isOffline ? styles.headerOffline : styles.headerOnline}>
           <View style={styles.headerLeft}>
             <MaterialIcons name="train" size={26} color={COLORS.white} />
             <Text style={styles.headerTitle}>BHARATPATH</Text>
@@ -72,9 +70,13 @@ export default function Dashboard() {
           )}
         </View>
 
-        {isTransitioning ? (
+        {isLoading ? (
+          <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+            <ActivityIndicator size="large" color={COLORS.primary} />
+          </View>
+        ) : isTransitioning ? (
           <View style={styles.transitionContainer}>
-            <MaterialCommunityIcons 
+            <MaterialCommunityIcons
               name={targetState ? "lan-disconnect" : "lan-connect"} 
               size={64} 
               color={COLORS.primary} 
@@ -90,53 +92,54 @@ export default function Dashboard() {
             </Text>
             </View>
           ) : isOffline ? (
-            <OfflineDashboard onHelpPress={() => setCurrentTab('help')} />
+            <OfflineDashboard onHelpPress={() => navigation.navigate('Help')} />
           ) : (
             <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
               <SearchHubCard />
-              <OnlineActiveJourneyCard />
-              <OnlineUtilitiesSection onExchangePress={() => setCurrentTab('exchange')} />
+              <OnlineActiveJourneyCard data={data} />
+              <OnlineUtilitiesSection 
+                onExchangePress={() => navigation.navigate('SeatExchange')} 
+                onConnectingPress={() => navigation.navigate('ConnectingJourney')}
+              />
             </ScrollView>
           )}
-        </>
-        )}
 
         {/* Unified Bottom Nav */}
-        <BottomNav isOffline={isOffline} currentTab={currentTab} onTabPress={setCurrentTab} />
+        <BottomNav isOffline={isOffline} />
       </View>
     </SafeAreaView>
   );
 }
 
-const BottomNav = ({ isOffline, currentTab, onTabPress }: { isOffline: boolean, currentTab: string, onTabPress: (t: 'home' | 'help') => void }) => (
-  <View style={styles.bottomNav}>
-    <TouchableOpacity style={styles.navItemWrap} onPress={() => onTabPress('home')}>
-      <View style={currentTab === 'home' ? (isOffline ? styles.navHomeActivePillOffline : styles.navHomeActivePillOnline) : null}>
-        <MaterialIcons name="home" size={26} color={currentTab === 'home' ? (isOffline ? COLORS.white : COLORS.primary) : COLORS.textLightGray} />
-        {currentTab === 'home' && isOffline ? <Text style={styles.navTextActivePillOffline}>HOME</Text> : null}
-      </View>
-      {!(currentTab === 'home' && isOffline) ? <Text style={currentTab === 'home' ? styles.navTextActiveOnline : styles.navText}>HOME</Text> : null}
-    </TouchableOpacity>
-    
-    <TouchableOpacity style={styles.navItemWrap}>
-      <MaterialIcons name="wifi-tethering" size={24} color={COLORS.textLightGray} />
-      <Text style={styles.navText}>LIVE STATUS</Text>
-    </TouchableOpacity>
+const BottomNav = ({ isOffline }: { isOffline: boolean }) => {
+  const navigation = useNavigation<any>();
+  return (
+    <View style={styles.bottomNav}>
+      <TouchableOpacity style={styles.navItemWrap}>
+        <View style={isOffline ? styles.navHomeActivePillOffline : styles.navHomeActivePillOnline}>
+          <MaterialIcons name="home" size={26} color={isOffline ? COLORS.white : COLORS.primary} />
+          {isOffline ? <Text style={styles.navTextActivePillOffline}>HOME</Text> : null}
+        </View>
+        {!isOffline ? <Text style={styles.navTextActiveOnline}>HOME</Text> : null}
+      </TouchableOpacity>
+      
+      <TouchableOpacity style={styles.navItemWrap}>
+        <MaterialIcons name="wifi-tethering" size={24} color={COLORS.textLightGray} />
+        <Text style={styles.navText}>LIVE STATUS</Text>
+      </TouchableOpacity>
 
-    <TouchableOpacity style={styles.navItemWrap} onPress={() => onTabPress('help')}>
-      <View style={currentTab === 'help' ? styles.navHomeActivePillOffline : null}>
-        <MaterialIcons name="sos" size={24} color={currentTab === 'help' ? COLORS.white : COLORS.textLightGray} />
-        {currentTab === 'help' ? <Text style={styles.navTextActivePillOffline}>SOS HELP</Text> : null}
-      </View>
-      {currentTab !== 'help' ? <Text style={styles.navText}>SOS HELP</Text> : null}
-    </TouchableOpacity>
+      <TouchableOpacity style={styles.navItemWrap} onPress={() => navigation.navigate('Help')}>
+        <MaterialIcons name="sos" size={24} color={COLORS.textLightGray} />
+        <Text style={styles.navText}>SOS HELP</Text>
+      </TouchableOpacity>
 
-    <TouchableOpacity style={styles.navItemWrap}>
-      <MaterialIcons name="person-outline" size={26} color={COLORS.textLightGray} />
-      <Text style={styles.navText}>PROFILE</Text>
-    </TouchableOpacity>
-  </View>
-);
+      <TouchableOpacity style={styles.navItemWrap}>
+        <MaterialIcons name="person-outline" size={26} color={COLORS.textLightGray} />
+        <Text style={styles.navText}>PROFILE</Text>
+      </TouchableOpacity>
+    </View>
+  );
+};
 
 const SearchHubCard = () => {
   const [activeTab, setActiveTab] = useState<'station' | 'pnr'>('station');
@@ -295,22 +298,22 @@ const SearchHubCard = () => {
   );
 };
 
-const OnlineActiveJourneyCard = () => (
+const OnlineActiveJourneyCard = ({ data }: { data: any }) => (
   <View style={styles.sectionContainer}>
     <View style={styles.sectionHeader}>
       <Text style={styles.sectionTitle}>ACTIVE JOURNEY</Text>
       <View style={styles.tagOrange}>
-        <Text style={styles.tagOrangeText}>ON TIME</Text>
+        <Text style={styles.tagOrangeText}>{data?.statusTag || 'ON TIME'}</Text>
       </View>
     </View>
     <View style={styles.cardNoPadding}>
       <View style={styles.journeyContent}>
-        <Text style={styles.journeyTrainName}>12259 SEALDAH DURONTO</Text>
-        <Text style={styles.journeySubText}>FASTEST TRANSIT</Text>
+        <Text style={styles.journeyTrainName}>{data?.trainNo} {data?.trainName}</Text>
+        <Text style={styles.journeySubText}>{data?.subText || 'FASTEST TRANSIT'}</Text>
         <View style={styles.stationMapping}>
           <View style={styles.stationBlockLeft}>
-            <Text style={styles.stationHuge} adjustsFontSizeToFit numberOfLines={1}>NDLS</Text>
-            <Text style={styles.stationCity}>NEW DELHI</Text>
+            <Text style={styles.stationHuge} adjustsFontSizeToFit numberOfLines={1}>{data?.sourceCode}</Text>
+            <Text style={styles.stationCity}>{data?.sourceCity}</Text>
           </View>
           <View style={styles.stationConnector}>
             <View style={styles.connectorLine} />
@@ -319,40 +322,40 @@ const OnlineActiveJourneyCard = () => (
             </View>
           </View>
           <View style={styles.stationBlockRight}>
-            <Text style={styles.stationHuge} adjustsFontSizeToFit numberOfLines={1}>SDAH</Text>
-            <Text style={styles.stationCity}>SEALDAH</Text>
+            <Text style={styles.stationHuge} adjustsFontSizeToFit numberOfLines={1}>{data?.destCode}</Text>
+            <Text style={styles.stationCity}>{data?.destCity}</Text>
           </View>
         </View>
         <View style={styles.journeyInfoRow}>
           <View style={styles.journeyInfoItem}>
             <Text style={styles.infoLabel}>DEPARTS</Text>
-            <Text style={styles.infoValue}>18:15</Text>
+            <Text style={styles.infoValue}>{data?.departs}</Text>
           </View>
           <View style={[styles.journeyInfoItem, {alignItems: 'center'}]}>
             <Text style={styles.infoLabel}>PLATFORM</Text>
-            <Text style={styles.infoValueBlue}>PF 12</Text>
+            <Text style={styles.infoValueBlue}>PF {data?.platform}</Text>
           </View>
           <View style={[styles.journeyInfoItem, {alignItems: 'flex-end'}]}>
             <Text style={styles.infoLabel}>COACH/SEAT</Text>
-            <Text style={styles.infoValue}>B4 / 22</Text>
+            <Text style={styles.infoValue}>{data?.coach} / {data?.seat}</Text>
           </View>
         </View>
         <View style={styles.progressSection}>
           <View style={styles.progressHeader}>
             <View style={styles.progressRow}>
               <Feather name="map-pin" size={14} color={COLORS.textGray} />
-              <Text style={styles.progressText}>Arriving at MGS Junction</Text>
+              <Text style={styles.progressText}>{data?.currentLocation || 'Arriving at MGS Junction'}</Text>
             </View>
-            <Text style={styles.etaText}>ETA 20:45</Text>
+            <Text style={styles.etaText}>ETA {data?.eta}</Text>
           </View>
           <View style={styles.progressBarBg}>
-            <View style={[styles.progressBarFill, {width: '60%'}]} />
-            <View style={[styles.progressDot, {left: '60%'}]} />
+            <View style={[styles.progressBarFill, {width: `${data?.progressPct || 60}%`}]} />
+            <View style={[styles.progressDot, {left: `${data?.progressPct || 60}%`}]} />
           </View>
         </View>
       </View>
       <View style={styles.journeyFooter}>
-        <Text style={styles.journeyFooterText}>SEALDAH DURONTO EXP</Text>
+        <Text style={styles.journeyFooterText}>{data?.trainName} EXP</Text>
         <TouchableOpacity style={styles.liveMapBtn}>
           <Text style={styles.liveMapText}>LIVE MAP</Text>
         </TouchableOpacity>
@@ -361,7 +364,7 @@ const OnlineActiveJourneyCard = () => (
   </View>
 );
 
-const OnlineUtilitiesSection = ({ onExchangePress }: { onExchangePress: () => void }) => (
+const OnlineUtilitiesSection = ({ onExchangePress, onConnectingPress }: { onExchangePress: () => void, onConnectingPress: () => void }) => (
   <View style={styles.sectionContainer}>
     <Text style={styles.sectionTitle}>TRAVEL UTILITIES</Text>
     <View style={styles.utilitiesGrid}>
@@ -376,7 +379,7 @@ const OnlineUtilitiesSection = ({ onExchangePress }: { onExchangePress: () => vo
           <Text style={styles.utilityTitle}>P2P Seat{'\n'}Exchange</Text>
         </View>
       </TouchableOpacity>
-      <TouchableOpacity style={styles.utilitySquare}>
+      <TouchableOpacity style={styles.utilitySquare} onPress={onConnectingPress}>
         <View style={[styles.iconBox3D, { backgroundColor: '#E3F2FD' }]}>
           <MaterialCommunityIcons name="train" size={32} color={COLORS.primary} />
           <View style={[styles.iconBadge, { backgroundColor: COLORS.success }]}>

@@ -1,6 +1,8 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, ImageBackground, Dimensions } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, ImageBackground, Dimensions, ActivityIndicator } from 'react-native';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
+import { useJourneyData } from '../hooks/useJourneyData';
 
 const { width } = Dimensions.get('window');
 
@@ -24,25 +26,36 @@ const COLORS = {
 };
 
 export default function OfflineDashboard({ onHelpPress }: { onHelpPress?: () => void }) {
+  const navigation = useNavigation<any>();
+  const { data, isLoading } = useJourneyData(true); // Always offline in this dashboard
+
+  if (isLoading) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', marginTop: 100 }}>
+        <ActivityIndicator size="large" color={COLORS.primary} />
+      </View>
+    );
+  }
+
   return (
     <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-      <BoardedCard />
-      <OfflineUtilities onHelpPress={onHelpPress} />
-      <NextHaltBanner />
+      <BoardedCard data={data} />
+      <OfflineUtilities onHelpPress={onHelpPress} navigation={navigation} />
+      <NextHaltBanner data={data} />
     </ScrollView>
   );
 }
 
-const BoardedCard = () => (
+const BoardedCard = ({ data }: { data: any }) => (
   <View style={styles.boardedCard}>
     <Text style={styles.boardedSubtitle}>CURRENTLY BOARDED</Text>
-    <Text style={styles.boardedTitle}>12259 SEALDAH{'\n'}DURONTO</Text>
+    <Text style={styles.boardedTitle}>{data?.trainNo} {data?.trainName?.split(' ')[0]}{'\n'}{data?.trainName?.split(' ').slice(1).join(' ') || ''}</Text>
 
     <View style={styles.routeHeader}>
       <View style={styles.routeOrigin}>
         <Text style={styles.routeLabelSmall}>ORIGIN</Text>
-        <Text style={styles.routeCode} adjustsFontSizeToFit numberOfLines={1}>NDLS</Text>
-        <Text style={styles.routeCity}>New Delhi</Text>
+        <Text style={styles.routeCode} adjustsFontSizeToFit numberOfLines={1}>{data?.sourceCode}</Text>
+        <Text style={styles.routeCity}>{data?.sourceCity}</Text>
       </View>
 
       <View style={styles.routeCenter}>
@@ -56,29 +69,29 @@ const BoardedCard = () => (
 
       <View style={styles.routeDest}>
         <Text style={styles.routeLabelSmall}>DESTINATION</Text>
-        <Text style={styles.routeCode} adjustsFontSizeToFit numberOfLines={1}>SDAH</Text>
-        <Text style={styles.routeCity}>Sealdah</Text>
+        <Text style={styles.routeCode} adjustsFontSizeToFit numberOfLines={1}>{data?.destCode}</Text>
+        <Text style={styles.routeCity}>{data?.destCity}</Text>
       </View>
     </View>
 
     <View style={styles.quickInfoBlocks}>
       <View style={styles.infoBlock}>
         <Text style={styles.blockLabel}>PLATFORM</Text>
-        <Text style={styles.blockValue}>09</Text>
+        <Text style={styles.blockValue}>{data?.platform || '09'}</Text>
       </View>
       <View style={[styles.infoBlock, {marginHorizontal: 12}]}>
         <Text style={styles.blockLabel}>ETA</Text>
-        <Text style={styles.blockValue}>12:45</Text>
+        <Text style={styles.blockValue}>{data?.eta || '12:45'}</Text>
       </View>
       <View style={[styles.infoBlock, styles.coachBlock]}>
         <Text style={styles.blockLabel}>COACH/SEAT</Text>
-        <Text style={styles.blockValue}>B4/32</Text>
+        <Text style={styles.blockValue}>{data?.coach}/{data?.seat}</Text>
       </View>
     </View>
   </View>
 );
 
-const OfflineUtilities = ({ onHelpPress }: { onHelpPress?: () => void }) => (
+const OfflineUtilities = ({ onHelpPress, navigation }: { onHelpPress?: () => void, navigation: any }) => (
   <View style={styles.offlineUtilsContainer}>
     {/* Active Offline Utilities */}
     <View style={styles.offlineRow}>
@@ -125,24 +138,26 @@ const OfflineUtilities = ({ onHelpPress }: { onHelpPress?: () => void }) => (
         </View>
       </View>
 
-      <View style={[styles.offlineUtilitySquare, styles.utilDisabled]}>
-        <MaterialCommunityIcons name="cloud-off-outline" size={20} color={COLORS.disabledText} style={styles.cloudOffIcon} />
-        <View style={[styles.iconBox3D, { backgroundColor: '#EEEEEE' }]}>
-          <MaterialCommunityIcons name="train" size={28} color={COLORS.disabledText} />
-          <View style={[styles.iconBadge, { backgroundColor: COLORS.textLightGray }]}>
+      <TouchableOpacity 
+        style={[styles.offlineUtilitySquare, styles.utilIndigoBorder]} 
+        onPress={() => navigation.navigate('ConnectingJourney')}
+      >
+        <View style={[styles.iconBox3D, { backgroundColor: '#E8EAF6' }]}>
+          <MaterialCommunityIcons name="train" size={28} color={COLORS.primary} />
+          <View style={[styles.iconBadge, { backgroundColor: COLORS.warning }]}>
             <MaterialCommunityIcons name="directions-fork" size={14} color={COLORS.white} />
           </View>
         </View>
         <View style={styles.utilityTextWrap}>
-          <Text style={styles.offlineUtilTitleDisabled}>CONNECTING TRIP</Text>
-          <Text style={styles.offlineUtilDescDisabled}>Requires Connection</Text>
+          <Text style={styles.offlineUtilTitle}>CONNECTING TRIP</Text>
+          <Text style={styles.offlineUtilDesc}>Find multi-leg offline routes</Text>
         </View>
-      </View>
+      </TouchableOpacity>
     </View>
   </View>
 );
 
-const NextHaltBanner = () => (
+const NextHaltBanner = ({ data }: { data: any }) => (
   <View style={styles.nextHaltContainer}>
     <ImageBackground 
       source={{uri: 'https://images.unsplash.com/photo-1474487548417-781cb71495f3?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80'}} 
@@ -151,7 +166,7 @@ const NextHaltBanner = () => (
     >
       <View style={styles.nextHaltOverlay}>
         <Text style={styles.nextHaltLabel}>NEXT MAJOR HALT</Text>
-        <Text style={styles.nextHaltStation}>ASANSOL JN (ASN)</Text>
+        <Text style={styles.nextHaltStation}>{data?.nextHalt || 'ASANSOL JN (ASN)'}</Text>
       </View>
     </ImageBackground>
   </View>
@@ -194,6 +209,7 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   utilBlueBorder: { borderLeftWidth: 4, borderLeftColor: COLORS.primary },
+  utilIndigoBorder: { borderLeftWidth: 4, borderLeftColor: COLORS.primary, borderWidth: 1, borderColor: COLORS.divider },
   utilOrangeBorder: { borderWidth: 2, borderColor: COLORS.warning },
   utilDisabled: { backgroundColor: COLORS.disabledBg, shadowOpacity: 0, elevation: 0 },
   

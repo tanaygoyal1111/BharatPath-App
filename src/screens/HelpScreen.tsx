@@ -1,6 +1,10 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, StatusBar } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, StatusBar, Modal, TextInput, Alert } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
 import { Feather, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { triggerOfficialComplaint, triggerEmergencyCall, IssueType } from '../utils/complaintEngine';
+import { saveJourneyData, getJourneyData } from '../utils/storage';
 
 const COLORS = {
   primary: '#1A237E', // Deep Reliability Indigo
@@ -15,17 +19,85 @@ const COLORS = {
   iconBg: '#F1F5F9', 
 };
 
-export default function HelpScreen({ onBack }: { onBack: () => void }) {
+export default function HelpScreen() {
+  const navigation = useNavigation();
+  const [showPnrModal, setShowPnrModal] = React.useState(false);
+  const [pnrInput, setPnrInput] = React.useState('');
+  const [activePnr, setActivePnr] = React.useState<string | null>(null);
+  const [pendingIssue, setPendingIssue] = React.useState<IssueType | null>(null);
+
+  React.useEffect(() => {
+    loadActivePnr();
+  }, []);
+
+  const loadActivePnr = async () => {
+    const data = await getJourneyData();
+    if (data?.pnr && data.pnr !== 'UNKNOWN') {
+      setActivePnr(data.pnr);
+      setPnrInput(data.pnr);
+    }
+  };
+
+  const handleComplaintTap = async (issueType: IssueType) => {
+    const data = await getJourneyData();
+    if (!data || !data.pnr || data.pnr === 'UNKNOWN') {
+      setPendingIssue(issueType);
+      setShowPnrModal(true);
+    } else {
+      triggerOfficialComplaint(issueType, navigation);
+    }
+  };
+
+  const handlePnrSubmit = async () => {
+    if (pnrInput.length !== 10) {
+      Alert.alert('Invalid PNR', 'Please enter a valid 10-digit PNR.');
+      return;
+    }
+
+    // Securely persist to disk
+    const existingData = await getJourneyData();
+    await saveJourneyData({ ...existingData, pnr: pnrInput });
+    setActivePnr(pnrInput);
+    setShowPnrModal(false);
+    
+    // Auto-trigger the complaint 
+    if (pendingIssue) {
+      setTimeout(() => {
+        triggerOfficialComplaint(pendingIssue, navigation);
+        setPendingIssue(null);
+      }, 500); 
+    }
+  };
+
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={onBack} style={styles.backButton}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
           <Feather name="arrow-left" size={24} color={COLORS.primary} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>HELP & SUPPORT</Text>
+        <Text style={styles.headerTitle}>SOS & HELP</Text>
         <View style={{ width: 40 }} />
       </View>
+
+      {/* Active Journey Badge */}
+      {activePnr && (
+        <View style={styles.activePnrBadge}>
+          <View style={styles.pnrInfoRow}>
+            <MaterialCommunityIcons name="ticket-confirmation" size={16} color={COLORS.primary} />
+            <Text style={styles.activePnrText}>JOURNEY PNR: {activePnr}</Text>
+          </View>
+          <TouchableOpacity 
+            style={styles.editPnrBtn} 
+            onPress={() => {
+              setPendingIssue(null); // No auto-trigger on manual edit
+              setShowPnrModal(true);
+            }}
+          >
+            <Text style={styles.editPnrText}>EDIT</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {/* Offline Ready Banner */}
@@ -37,7 +109,7 @@ export default function HelpScreen({ onBack }: { onBack: () => void }) {
         {/* Emergency SOS */}
         <Text style={styles.sectionTitle}>EMERGENCY SOS</Text>
         <View style={styles.sosGrid}>
-          <TouchableOpacity style={styles.sosCard}>
+          <TouchableOpacity style={styles.sosCard} onPress={() => triggerEmergencyCall('139')}>
             <View style={styles.sosIconBoxOrange}>
               <MaterialIcons name="phone" size={20} color={COLORS.white} />
               <Text style={styles.sosNumber}>139</Text>
@@ -46,7 +118,7 @@ export default function HelpScreen({ onBack }: { onBack: () => void }) {
             <Text style={styles.sosCardSubtitle}>24/7 Security & Fire</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.sosCard}>
+          <TouchableOpacity style={styles.sosCard} onPress={() => handleComplaintTap('medical')}>
             <View style={styles.sosIconBoxBlue}>
               <Feather name="plus" size={24} color={COLORS.primary} />
               <Text style={styles.sosMedicalText}>MEDICAL</Text>
@@ -64,7 +136,7 @@ export default function HelpScreen({ onBack }: { onBack: () => void }) {
           </View>
         </View>
 
-        <TouchableOpacity style={styles.listItem}>
+        <TouchableOpacity style={styles.listItem} onPress={() => handleComplaintTap('cleaning')}>
           <View style={styles.listIconBox}>
             <MaterialCommunityIcons name="spray-bottle" size={24} color={COLORS.primary} />
           </View>
@@ -75,7 +147,7 @@ export default function HelpScreen({ onBack }: { onBack: () => void }) {
           <MaterialCommunityIcons name="message-processing" size={24} color="#94A3B8" />
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.listItem}>
+        <TouchableOpacity style={styles.listItem} onPress={() => handleComplaintTap('electrical')}>
           <View style={styles.listIconBox}>
             <MaterialCommunityIcons name="snowflake" size={24} color={COLORS.primary} />
           </View>
@@ -86,7 +158,7 @@ export default function HelpScreen({ onBack }: { onBack: () => void }) {
           <MaterialCommunityIcons name="message-processing" size={24} color="#94A3B8" />
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.listItem}>
+        <TouchableOpacity style={styles.listItem} onPress={() => handleComplaintTap('security')}>
           <View style={styles.listIconBox}>
             <MaterialCommunityIcons name="seat-passenger" size={24} color={COLORS.primary} />
           </View>
@@ -110,7 +182,43 @@ export default function HelpScreen({ onBack }: { onBack: () => void }) {
           <Feather name="arrow-up-right" size={24} color={COLORS.primary} />
         </TouchableOpacity>
       </ScrollView>
-    </View>
+
+      <Modal visible={showPnrModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <TouchableOpacity style={{ flex: 1 }} onPress={() => setShowPnrModal(false)} />
+          <View style={styles.modalContent}>
+            {/* Bottom Sheet Handle */}
+            <View style={styles.sheetHandle} />
+            
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>IDENTIFICATION REQ.</Text>
+            </View>
+            
+            <Text style={styles.modalDesc}>
+              To file an official complaint via SMS, we need to verify your 10-digit PNR for the automated IRCTC parsing system.
+            </Text>
+
+            <View style={styles.pnrInputWrapper}>
+              <MaterialCommunityIcons name="ticket" size={20} color={COLORS.primary} style={styles.pnrIcon} />
+              <TextInput
+                style={styles.pnrInputText}
+                placeholder="Enter 10-digit PNR"
+                placeholderTextColor={COLORS.textGray}
+                keyboardType="number-pad"
+                maxLength={10}
+                value={pnrInput}
+                onChangeText={setPnrInput}
+              />
+            </View>
+
+            <TouchableOpacity style={styles.submitButton} onPress={handlePnrSubmit}>
+              <Text style={styles.submitButtonText}>VERIFY & SEND REPORT</Text>
+              <Feather name="arrow-right" size={20} color={COLORS.white} />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </SafeAreaView>
   );
 }
 
@@ -118,7 +226,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
   header: {
     backgroundColor: COLORS.white,
-    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 24) + 16 : 16,
+    paddingTop: 16,
     paddingBottom: 16,
     paddingHorizontal: 16,
     flexDirection: 'row',
@@ -166,5 +274,64 @@ const styles = StyleSheet.create({
   onlineCard: {
     backgroundColor: COLORS.white, borderRadius: 16, padding: 16, flexDirection: 'row', alignItems: 'center',
     borderWidth: 2, borderColor: COLORS.primary, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 2,
+  },
+  
+  // Modal Styles
+  modalOverlay: {
+    flex: 1, backgroundColor: 'rgba(26,28,28,0.7)', justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: COLORS.white, borderTopLeftRadius: 32, borderTopRightRadius: 32,
+    paddingHorizontal: 28, paddingTop: 12, paddingBottom: Platform.OS === 'ios' ? 44 : 32,
+    shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 20, elevation: 10,
+  },
+  sheetHandle: {
+    width: 40, height: 4, backgroundColor: '#E2E8F0', borderRadius: 2,
+    alignSelf: 'center', marginBottom: 20,
+  },
+  modalHeader: {
+    flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginBottom: 12,
+  },
+  modalTitle: {
+    fontSize: 13, fontWeight: '900', color: COLORS.primary, letterSpacing: 1.5,
+  },
+  modalDesc: {
+    fontSize: 13, color: COLORS.textGray, lineHeight: 20, marginBottom: 28, fontWeight: '600', textAlign: 'center',
+  },
+  pnrInputWrapper: {
+    flexDirection: 'row', alignItems: 'center', backgroundColor: '#F1F5F9', borderRadius: 16, 
+    paddingHorizontal: 20, paddingVertical: 18, borderWidth: 1, borderColor: '#E2E8F0', marginBottom: 28,
+  },
+  pnrIcon: { marginRight: 16 },
+  pnrInputText: {
+    flex: 1, fontSize: 18, fontWeight: '800', color: COLORS.textDark, letterSpacing: 2,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+  },
+  submitButton: {
+    backgroundColor: COLORS.primary, borderRadius: 18, paddingVertical: 20,
+    flexDirection: 'row', justifyContent: 'center', alignItems: 'center',
+    shadowColor: COLORS.primary, shadowOpacity: 0.3, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 4,
+  },
+  submitButtonText: {
+    color: COLORS.white, fontWeight: '900', fontSize: 13, letterSpacing: 1, marginRight: 10,
+  },
+  // PNR Badge Styles
+  activePnrBadge: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    backgroundColor: '#EEF2FF', paddingHorizontal: 20, paddingVertical: 12,
+    borderBottomWidth: 1, borderBottomColor: '#E0E7FF',
+  },
+  pnrInfoRow: {
+    flexDirection: 'row', alignItems: 'center',
+  },
+  activePnrText: {
+    fontSize: 11, fontWeight: '800', color: COLORS.primary, marginLeft: 8, letterSpacing: 0.5,
+  },
+  editPnrBtn: {
+    backgroundColor: COLORS.white, paddingHorizontal: 12, paddingVertical: 6,
+    borderRadius: 8, borderWidth: 1, borderColor: '#C7D2FE',
+  },
+  editPnrText: {
+    fontSize: 10, fontWeight: '900', color: COLORS.primary,
   },
 });
