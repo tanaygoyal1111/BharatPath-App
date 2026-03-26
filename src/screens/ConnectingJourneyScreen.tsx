@@ -29,19 +29,12 @@ export default function ConnectingJourneyScreen() {
   const [resultsLoaded, setResultsLoaded] = useState(true);
   const [isSearchingLoading, setIsSearchingLoading] = useState(false);
 
-  // Params
-  const [fromStation, setFromStation] = useState('NDLS');
-  const [toStation, setToStation] = useState('BSB');
-  const [travelDate, setTravelDate] = useState('20 MAY 2026');
   const [isOnline, setIsOnline] = useState(false);
   const [journeyResults, setJourneyResults] = useState<JourneyOption[]>([]);
 
-  // UX Logic
-  const [activeInput, setActiveInput] = useState<'from' | 'to' | null>(null);
   const [showCalendar, setShowCalendar] = useState(false);
   const [selectedCalendarDate, setSelectedCalendarDate] = useState(new Date());
   
-  // Custom Autocomplete Data
   const ALL_STATIONS = useMemo(() => Object.keys(masterMap), []);
 
   const weekDays = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
@@ -74,7 +67,6 @@ export default function ConnectingJourneyScreen() {
     }, 800);
   };
 
-  // Initial load
   useEffect(() => {
     handleUpdate();
   }, []);
@@ -83,7 +75,6 @@ export default function ConnectingJourneyScreen() {
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor={COLORS.primary} />
       
-      {/* 1. Header (Aligned with Seat Exchange) */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
            <Feather name="arrow-left" size={24} color={COLORS.white} />
@@ -107,7 +98,6 @@ export default function ConnectingJourneyScreen() {
         style={{ flex: 1 }}
       >
         
-        {/* 2. Search Hub */}
         <View style={styles.searchHubCard}>
            {!isModifying ? (
              <View>
@@ -204,13 +194,11 @@ export default function ConnectingJourneyScreen() {
            )}
         </View>
 
-        {/* 3. Findings Header */}
         <View style={styles.sectionHeader}>
            <Text style={styles.sectionSubtitle}>RESULTS FOUND</Text>
            <Text style={styles.sectionTitle}>{journeyResults.length.toString().padStart(2, '0')} CONNECTING JOURNEYS</Text>
         </View>
 
-        {/* 4. Journey Result Cards */}
         <View style={{ paddingHorizontal: 20 }}>
            {journeyResults.length > 0 ? (
              journeyResults.map((option, idx) => (
@@ -254,7 +242,6 @@ export default function ConnectingJourneyScreen() {
         </View>
       </ScrollView>
 
-      {/* 5. High-Fidelity Calendar Modal (Dashboard Style) */}
       <Modal visible={showCalendar} transparent animationType="fade">
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowCalendar(false)}>
           <TouchableOpacity style={styles.calendarContainer} activeOpacity={1}>

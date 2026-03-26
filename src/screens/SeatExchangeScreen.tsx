@@ -85,7 +85,6 @@ const VerifiedSeatExchangeView = () => {
   return (
     <View style={styles.verifiedContainer}>
       
-      {/* 1. Verification Status Card */}
       <View style={[styles.sectionCard, { paddingVertical: 16 }]}>
         <View style={styles.infoLeftBorder} />
         <View style={styles.statusTextWrap}>
@@ -95,7 +94,6 @@ const VerifiedSeatExchangeView = () => {
         <MaterialCommunityIcons name="shield-check" size={22} color={COLORS.primary} />
       </View>
 
-      {/* 2. Your Current Seat Card */}
       <View style={styles.sectionCard}>
         <View style={[styles.infoLeftBorder, {backgroundColor: COLORS.primary}]} />
         <View style={styles.cardContent}>
@@ -121,7 +119,6 @@ const VerifiedSeatExchangeView = () => {
         </View>
       </View>
 
-      {/* 3. I Want To Swap For Card */}
       <View style={styles.sectionCard}>
         <View style={[styles.infoLeftBorder, {backgroundColor: COLORS.warningOrange}]} />
         <View style={styles.cardContent}>
@@ -164,23 +161,19 @@ const VerifiedSeatExchangeView = () => {
         </View>
       </View>
 
-      {/* 4. Find Matches Button */}
       <TouchableOpacity style={styles.findMatchesButton}>
         <Text style={styles.verifyButtonText}>FIND MATCHES</Text>
         <Feather name="search" size={18} color={COLORS.white} style={{marginLeft: 8}} />
       </TouchableOpacity>
 
-      {/* 5. MATCH REQUESTS Header */}
       <View style={styles.requestsHeaderRow}>
         <Text style={styles.requestsHeaderText}>MATCH REQUESTS</Text>
         <View style={styles.requestsHeaderLine} />
       </View>
 
-      {/* 6. Match Request Cards */}
       <MatchRequestCard current="SU" offered="LB" from="B2/45" />
       <MatchRequestCard current="SU" offered="SL" from="B1/12" />
 
-      {/* 7. Footer text */}
       <View style={styles.verifiedFooter}>
         <Feather name="lock" size={14} color={COLORS.textGray} style={styles.footerIcon} />
         <Text style={styles.verifiedFooterText}>
@@ -288,7 +281,7 @@ const styles = StyleSheet.create({
   },
   verifyButtonText: { color: COLORS.white, fontWeight: '800', fontSize: 13, letterSpacing: 1, marginRight: 4 },
   
-  // -- Verified UI Styles --
+  // -- UI Styles --
   verifiedContainer: { flex: 1 },
   sectionCard: {
     backgroundColor: COLORS.white,
