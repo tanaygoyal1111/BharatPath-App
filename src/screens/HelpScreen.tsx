@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, StatusBar, Modal, TextInput, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -21,12 +21,12 @@ const COLORS = {
 
 export default function HelpScreen() {
   const navigation = useNavigation();
-  const [showPnrModal, setShowPnrModal] = React.useState(false);
-  const [pnrInput, setPnrInput] = React.useState('');
-  const [activePnr, setActivePnr] = React.useState<string | null>(null);
-  const [pendingIssue, setPendingIssue] = React.useState<IssueType | null>(null);
+  const [showPnrModal, setShowPnrModal] = useState(false);
+  const [pnrInput, setPnrInput] = useState('');
+  const [activePnr, setActivePnr] = useState<string | null>(null);
+  const [pendingIssue, setPendingIssue] = useState<IssueType | null>(null);
 
-  React.useEffect(() => {
+  useEffect(() => {
     loadActivePnr();
   }, []);
 

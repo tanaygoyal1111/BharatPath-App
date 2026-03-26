@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, StatusBar, TextInput, Animated, Dimensions, ActivityIndicator, LayoutAnimation, UIManager, Modal, FlatList } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -25,24 +25,24 @@ const COLORS = {
 
 export default function ConnectingJourneyScreen() {
   const navigation = useNavigation();
-  const [isModifying, setIsModifying] = React.useState(false);
-  const [resultsLoaded, setResultsLoaded] = React.useState(true);
-  const [isSearchingLoading, setIsSearchingLoading] = React.useState(false);
+  const [isModifying, setIsModifying] = useState(false);
+  const [resultsLoaded, setResultsLoaded] = useState(true);
+  const [isSearchingLoading, setIsSearchingLoading] = useState(false);
 
   // Params
-  const [fromStation, setFromStation] = React.useState('NDLS');
-  const [toStation, setToStation] = React.useState('BSB');
-  const [travelDate, setTravelDate] = React.useState('20 MAY 2026');
-  const [isOnline, setIsOnline] = React.useState(false);
-  const [journeyResults, setJourneyResults] = React.useState<JourneyOption[]>([]);
+  const [fromStation, setFromStation] = useState('NDLS');
+  const [toStation, setToStation] = useState('BSB');
+  const [travelDate, setTravelDate] = useState('20 MAY 2026');
+  const [isOnline, setIsOnline] = useState(false);
+  const [journeyResults, setJourneyResults] = useState<JourneyOption[]>([]);
 
   // UX Logic
-  const [activeInput, setActiveInput] = React.useState<'from' | 'to' | null>(null);
-  const [showCalendar, setShowCalendar] = React.useState(false);
-  const [selectedCalendarDate, setSelectedCalendarDate] = React.useState(new Date());
+  const [activeInput, setActiveInput] = useState<'from' | 'to' | null>(null);
+  const [showCalendar, setShowCalendar] = useState(false);
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState(new Date());
   
   // Custom Autocomplete Data
-  const ALL_STATIONS = React.useMemo(() => Object.keys(masterMap), []);
+  const ALL_STATIONS = useMemo(() => Object.keys(masterMap), []);
 
   const weekDays = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
   const mockDays = Array.from({length: 31}, (_, i) => i + 1);
@@ -75,7 +75,7 @@ export default function ConnectingJourneyScreen() {
   };
 
   // Initial load
-  React.useEffect(() => {
+  useEffect(() => {
     handleUpdate();
   }, []);
 
