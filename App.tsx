@@ -5,7 +5,6 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import AppNavigator from './src/navigation/AppNavigator';
 
 export default function App() {
-  // Move QueryClient instantiation inside the component state to prevent "Cannot read property 'prototype' of undefined"
   const [queryClient] = useState(() => new QueryClient({
     defaultOptions: {
       queries: {
