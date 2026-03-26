@@ -93,11 +93,6 @@ export const findConnectingRoutes = (source: string, destination: string): Journ
           const leg1ArrMinutes = timeToMinutes(leg1.arr);
           const leg2DepMinutes = timeToMinutes(leg2.dep);
           
-          /**
-           * Layover Calculation:
-           * If the departure time of the second leg is earlier than the arrival 
-           * of the first leg, we assume it's a next-day connection (+1440 mins).
-           */
           let layover = leg2DepMinutes - leg1ArrMinutes;
           if (layover < 0) layover += 1440; 
 

@@ -23,7 +23,6 @@ const formatDOJ = (date?: string | Date) => {
  */
 export const triggerOfficialComplaint = async (issueType: IssueType, navigation: any, customMessage: string = '') => {
   try {
-    // 1. Fetch live or fallback journey details from our persistent AsyncStorage
     const data = await getJourneyData();
     
     // EDGE CASE 1: Empty Cache
@@ -36,8 +35,7 @@ export const triggerOfficialComplaint = async (issueType: IssueType, navigation:
       return;
     }
 
-    // EDGE CASE 2: Inactive Journey Validation
-    // Assume active if statusTag is 'ON TIME', 'BOARDED', or 'ACTIVE'
+    // Inactive Journey Validation
     if (data.statusTag !== 'ON TIME' && data.statusTag !== 'BOARDED' && data.statusTag !== 'ACTIVE') {
       Alert.alert(
         'Invalid Journey',
@@ -46,9 +44,8 @@ export const triggerOfficialComplaint = async (issueType: IssueType, navigation:
       return;
     }
 
-    // 2. Format precise SMS following the fixed key-value automation pattern
-    const doj = formatDOJ(); // Falling back to current date if none provided in journey data
-    let targetNumber = '139'; // RailMadad standard
+    const doj = formatDOJ(); 
+    let targetNumber = '139';
     let messageBody = '';
 
     switch (issueType) {
@@ -72,11 +69,9 @@ export const triggerOfficialComplaint = async (issueType: IssueType, navigation:
         return;
     }
 
-    // 3. Verify SMS capability on the physical device
     const isAvailable = await SMS.isAvailableAsync();
     
     if (isAvailable) {
-      // 4. Auto-fill the message app
       await SMS.sendSMSAsync([targetNumber], messageBody);
     } else {
       Alert.alert('SMS Unavailable', 'Your device does not support SMS messaging.');
