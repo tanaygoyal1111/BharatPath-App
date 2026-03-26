@@ -25,7 +25,6 @@ export const triggerOfficialComplaint = async (issueType: IssueType, navigation:
   try {
     const data = await getJourneyData();
     
-    // EDGE CASE 1: Empty Cache
     if (!data || !data.pnr || data.pnr === 'UNKNOWN') {
       Alert.alert(
         'Missing Journey Data', 

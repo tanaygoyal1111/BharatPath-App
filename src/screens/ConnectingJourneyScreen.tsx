@@ -29,9 +29,13 @@ export default function ConnectingJourneyScreen() {
   const [resultsLoaded, setResultsLoaded] = useState(true);
   const [isSearchingLoading, setIsSearchingLoading] = useState(false);
 
+  const [fromStation, setFromStation] = useState('NDLS');
+  const [toStation, setToStation] = useState('BSB');
+  const [travelDate, setTravelDate] = useState('20 MAY 2026');
   const [isOnline, setIsOnline] = useState(false);
   const [journeyResults, setJourneyResults] = useState<JourneyOption[]>([]);
 
+  const [activeInput, setActiveInput] = useState<'from' | 'to' | null>(null);
   const [showCalendar, setShowCalendar] = useState(false);
   const [selectedCalendarDate, setSelectedCalendarDate] = useState(new Date());
   

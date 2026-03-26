@@ -37,8 +37,6 @@ const timeToMinutes = (timeStr: string): number => {
  * - Minimum: 60 minutes
  * - Maximum: 180 minutes (3 hours)
  * - Scaled: 25% of the first leg's duration
- * 
- * Clamped Dynamic Buffer Math: max(60, min(leg1Duration * 0.25, 180))
  */
 const calculateBuffer = (leg1Duration: number): number => {
   const buffer = Math.max(60, Math.min(leg1Duration * 0.25, 180));
@@ -59,7 +57,6 @@ export const findConnectingRoutes = (source: string, destination: string): Journ
 
   if (!graph[source] || !graph[destination]) return [];
 
-  // 1. Direct Leg Search
   const sourceStation = graph[source];
   if (sourceStation.connections) {
     sourceStation.connections.forEach((conn: any) => {
@@ -81,7 +78,6 @@ export const findConnectingRoutes = (source: string, destination: string): Journ
     });
   }
 
-  // 2. Connecting Leg Search (1 Transfer)
   if (sourceStation.connections) {
     sourceStation.connections.forEach((leg1: any) => {
       const intermediateStation = graph[leg1.to];
