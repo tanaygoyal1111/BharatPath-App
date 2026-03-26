@@ -92,7 +92,7 @@ export default function Dashboard() {
             </Text>
             </View>
           ) : isOffline ? (
-            <OfflineDashboard onHelpPress={() => navigation.navigate('Help')} />
+            <OfflineDashboard onHelpPress={() => navigation.navigate('Help', { isOffline: true })} />
           ) : (
             <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
               <SearchHubCard />
@@ -128,7 +128,7 @@ const BottomNav = ({ isOffline }: { isOffline: boolean }) => {
         <Text style={styles.navText}>LIVE STATUS</Text>
       </TouchableOpacity>
 
-      <TouchableOpacity style={styles.navItemWrap} onPress={() => navigation.navigate('Help')}>
+      <TouchableOpacity style={styles.navItemWrap} onPress={() => navigation.navigate('Help', { isOffline })}>
         <MaterialIcons name="sos" size={24} color={COLORS.textLightGray} />
         <Text style={styles.navText}>SOS HELP</Text>
       </TouchableOpacity>

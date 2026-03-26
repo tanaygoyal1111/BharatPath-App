@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, StatusBar, Modal, TextInput, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, StatusBar, Modal, TextInput, Alert, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Feather, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -19,8 +19,9 @@ const COLORS = {
   iconBg: '#F1F5F9', 
 };
 
-export default function HelpScreen() {
+export default function HelpScreen({ route }: { route: any }) {
   const navigation = useNavigation();
+  const isOffline = route.params?.isOffline ?? false;
   const [showPnrModal, setShowPnrModal] = useState(false);
   const [pnrInput, setPnrInput] = useState('');
   const [activePnr, setActivePnr] = useState<string | null>(null);
@@ -66,6 +67,24 @@ export default function HelpScreen() {
         triggerOfficialComplaint(pendingIssue, navigation);
         setPendingIssue(null);
       }, 500); 
+    }
+  };
+
+  const handleRailMadadPress = async () => {
+    if (isOffline) {
+      Alert.alert(
+        'Connection Required',
+        'The official RailMadad portal requires an active internet connection. Please switch to Online Mode or connect to data to access the web portal.',
+        [{ text: 'OK' }]
+      );
+    } else {
+      const url = 'https://railmadad.indianrailways.gov.in/';
+      const supported = await Linking.canOpenURL(url);
+      if (supported) {
+        await Linking.openURL(url);
+      } else {
+        Alert.alert('Error', 'Unable to open the browser for RailMadad.');
+      }
     }
   };
 
@@ -171,7 +190,7 @@ export default function HelpScreen() {
 
         {/* Online Services */}
         <Text style={[styles.sectionTitle, { marginTop: 32 }]}>ONLINE SERVICES</Text>
-        <TouchableOpacity style={styles.onlineCard}>
+        <TouchableOpacity style={styles.onlineCard} onPress={handleRailMadadPress}>
           <View style={styles.listIconBox}>
             <Feather name="globe" size={24} color={COLORS.primary} />
           </View>
