@@ -1,11 +1,11 @@
-import React, { useState, useMemo } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Dimensions, StatusBar, Platform, Modal, ActivityIndicator, TextInput } from 'react-native';
+import React, { useState, useMemo, useEffect } from 'react';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Dimensions, StatusBar, Platform, Modal, ActivityIndicator, TextInput, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import OfflineDashboard from './OfflineDashboard';
-import { useJourneyData } from '../hooks/useJourneyData';
 import { useStationSearch } from '../hooks/useStationSearch';
+import { usePnrStatus, getCachedJourney, clearActiveJourney, JourneyData } from '../hooks/usePnrStatus';
 import masterMap from '../api/bharatpath_master_map.json';
 
 const { width } = Dimensions.get('window');
@@ -33,8 +33,24 @@ export default function Dashboard() {
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [targetState, setTargetState] = useState(false);
 
-  // Injecting our Data Fetching Hook
-  const { data, isLoading } = useJourneyData(isOffline);
+  // Active Journey State
+  const [activeJourney, setActiveJourney] = useState<JourneyData | null>(null);
+  const [isHydrating, setIsHydrating] = useState(true);
+
+  // Hydration logic
+  useEffect(() => {
+    const hydrate = async () => {
+      try {
+        const cached = await getCachedJourney();
+        if (cached) setActiveJourney(cached);
+      } catch (e) {
+        console.error('Hydration failed', e);
+      } finally {
+        setIsHydrating(false);
+      }
+    };
+    hydrate();
+  }, []);
 
   const handleNetworkSwitch = (toOffline: boolean) => {
     setTargetState(toOffline);
@@ -42,8 +58,16 @@ export default function Dashboard() {
     setTimeout(() => {
       setIsOffline(toOffline);
       setIsTransitioning(false);
-    }, 1200); // Simulate network state synchronization
+    }, 1200); 
   };
+
+  if (isHydrating) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.primary }}>
+        <ActivityIndicator color={COLORS.white} size="large" />
+      </View>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -72,11 +96,7 @@ export default function Dashboard() {
           )}
         </View>
 
-        {isLoading ? (
-          <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-            <ActivityIndicator size="large" color={COLORS.primary} />
-          </View>
-        ) : isTransitioning ? (
+        {isTransitioning ? (
           <View style={styles.transitionContainer}>
             <MaterialCommunityIcons
               name={targetState ? "lan-disconnect" : "lan-connect"} 
@@ -97,8 +117,22 @@ export default function Dashboard() {
             <OfflineDashboard onHelpPress={() => navigation.navigate('Help', { isOffline: true })} />
           ) : (
             <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-              <SearchHubCard />
-              <OnlineActiveJourneyCard data={data} />
+              <SearchHubCard 
+                activeJourney={activeJourney} 
+                onJourneyUpdate={setActiveJourney} 
+              />
+              
+              {activeJourney && (
+                <OnlineActiveJourneyCard 
+                  data={activeJourney} 
+                  onClear={() => {
+                    clearActiveJourney();
+                    setActiveJourney(null);
+                  }}
+                  onRefresh={(updated) => setActiveJourney(updated)}
+                />
+              )}
+
               <OnlineUtilitiesSection 
                 onExchangePress={() => navigation.navigate('SeatExchange')} 
                 onConnectingPress={() => navigation.navigate('ConnectingJourney')}
@@ -157,11 +191,23 @@ const HighlightText = ({ text, highlight }: { text: string; highlight: string })
   );
 };
 
-const SearchHubCard = () => {
+function SearchHubCard({ activeJourney, onJourneyUpdate }: { activeJourney: JourneyData | null, onJourneyUpdate: (j: JourneyData | null) => void }) {
   const navigation = useNavigation<any>();
   const [activeTab, setActiveTab] = useState<'station' | 'pnr'>('station');
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date());
+  const [pnrInput, setPnrInput] = useState('');
+
+  // PNR Mutation
+  const pnrMutation = usePnrStatus(
+    (data) => {
+      onJourneyUpdate(data);
+      setPnrInput('');
+    },
+    (err) => {
+      Alert.alert('PNR Error', err.message || 'Unable to fetch PNR status.');
+    }
+  );
 
   // Station Search Hooks
   const fromSearch = useStationSearch('NDLS');
@@ -185,6 +231,14 @@ const SearchHubCard = () => {
       to: toSearch.query,
       date: selectedDate.toISOString()
     });
+  };
+
+  const handleCheckPnr = () => {
+    if (pnrInput.length !== 10) {
+      Alert.alert('Invalid PNR', 'Please enter a valid 10-digit PNR number.');
+      return;
+    }
+    pnrMutation.mutate(pnrInput);
   };
 
   const handleTodayPress = () => setSelectedDate(new Date());
@@ -333,13 +387,39 @@ const SearchHubCard = () => {
         </View>
       ) : (
         <View>
-          <View style={styles.pnrInputContainer}>
-            <MaterialCommunityIcons name="ticket" size={20} color={COLORS.primary} style={styles.pnrIcon} />
-            <Text style={styles.pnrPlaceholder}>Enter 10-digit PNR</Text>
-          </View>
-          <TouchableOpacity style={styles.searchButton}>
-            <Text style={styles.searchButtonText}>CHECK STATUS</Text>
-          </TouchableOpacity>
+          {!activeJourney ? (
+            <>
+              <View style={styles.pnrInputContainer}>
+                <MaterialCommunityIcons name="ticket" size={20} color={COLORS.primary} style={styles.pnrIcon} />
+                <TextInput
+                  placeholder="Enter 10-digit PNR"
+                  style={{ flex: 1, fontSize: 16, fontWeight: '700', color: COLORS.textDark }}
+                  keyboardType="numeric"
+                  maxLength={10}
+                  value={pnrInput}
+                  onChangeText={setPnrInput}
+                />
+              </View>
+              <TouchableOpacity 
+                style={[styles.searchButton, pnrMutation.isPending && { opacity: 0.7 }]}
+                onPress={handleCheckPnr}
+                disabled={pnrMutation.isPending}
+              >
+                {pnrMutation.isPending ? (
+                  <ActivityIndicator color={COLORS.white} />
+                ) : (
+                  <Text style={styles.searchButtonText}>CHECK STATUS</Text>
+                )}
+              </TouchableOpacity>
+            </>
+          ) : (
+            <View style={{ marginTop: 20, alignItems: 'center', backgroundColor: COLORS.inputBg, padding: 20, borderRadius: 16 }}>
+              <MaterialIcons name="verified" size={32} color="#22C55E" />
+              <Text style={{ fontSize: 16, fontWeight: '900', color: COLORS.textDark, marginTop: 12 }}>Active Journey Found</Text>
+              <Text style={{ fontSize: 12, color: COLORS.textGray, marginTop: 4 }}>Monitoring PNR: {activeJourney.pnr}</Text>
+              <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.primary, marginTop: 16 }}>SCROLL DOWN FOR DETAILS</Text>
+            </View>
+          )}
         </View>
       )}
 
@@ -379,73 +459,94 @@ const SearchHubCard = () => {
 
     </View>
   );
-};
+}
 
-const OnlineActiveJourneyCard = ({ data }: { data: any }) => (
-  <View style={styles.sectionContainer}>
-    <View style={styles.sectionHeader}>
-      <Text style={styles.sectionTitle}>ACTIVE JOURNEY</Text>
-      <View style={styles.tagOrange}>
-        <Text style={styles.tagOrangeText}>{data?.statusTag || 'ON TIME'}</Text>
+const OnlineActiveJourneyCard = ({ data, onClear, onRefresh }: { data: JourneyData, onClear: () => void, onRefresh: (j: JourneyData) => void }) => {
+  const pnrMutation = usePnrStatus(
+    (updated) => onRefresh(updated),
+    (err) => Alert.alert('Refresh Failed', err.message || 'Check connection')
+  );
+
+  return (
+    <View style={styles.sectionContainer}>
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionTitle}>ACTIVE JOURNEY</Text>
+        <View style={styles.tagOrange}>
+          <Text style={styles.tagOrangeText}>{data?.statusTag || 'ON TIME'}</Text>
+        </View>
       </View>
-    </View>
-    <View style={styles.cardNoPadding}>
-      <View style={styles.journeyContent}>
-        <Text style={styles.journeyTrainName}>{data?.trainNo} {data?.trainName}</Text>
-        <Text style={styles.journeySubText}>{data?.subText || 'FASTEST TRANSIT'}</Text>
-        <View style={styles.stationMapping}>
-          <View style={styles.stationBlockLeft}>
-            <Text style={styles.stationHuge} adjustsFontSizeToFit numberOfLines={1}>{data?.sourceCode}</Text>
-            <Text style={styles.stationCity}>{data?.sourceCity}</Text>
-          </View>
-          <View style={styles.stationConnector}>
-            <View style={styles.connectorLine} />
-            <View style={styles.connectorIconWrap}>
-              <MaterialCommunityIcons name="train" size={18} color={COLORS.textGray} />
+      <View style={styles.cardNoPadding}>
+        <View style={styles.journeyContent}>
+          <Text style={styles.journeyTrainName}>{data?.trainNo} {data?.trainName}</Text>
+          <Text style={styles.journeySubText}>{data?.subText || 'FASTEST TRANSIT'}</Text>
+          <View style={styles.stationMapping}>
+            <View style={styles.stationBlockLeft}>
+              <Text style={styles.stationHuge} adjustsFontSizeToFit numberOfLines={1}>{data?.sourceCode}</Text>
+              <Text style={styles.stationCity}>{data?.sourceCity}</Text>
+            </View>
+            <View style={styles.stationConnector}>
+              <View style={styles.connectorLine} />
+              <View style={styles.connectorIconWrap}>
+                <MaterialCommunityIcons name="train" size={18} color={COLORS.textGray} />
+              </View>
+            </View>
+            <View style={styles.stationBlockRight}>
+              <Text style={styles.stationHuge} adjustsFontSizeToFit numberOfLines={1}>{data?.destCode}</Text>
+              <Text style={styles.stationCity}>{data?.destCity}</Text>
             </View>
           </View>
-          <View style={styles.stationBlockRight}>
-            <Text style={styles.stationHuge} adjustsFontSizeToFit numberOfLines={1}>{data?.destCode}</Text>
-            <Text style={styles.stationCity}>{data?.destCity}</Text>
-          </View>
-        </View>
-        <View style={styles.journeyInfoRow}>
-          <View style={styles.journeyInfoItem}>
-            <Text style={styles.infoLabel}>DEPARTS</Text>
-            <Text style={styles.infoValue}>{data?.departs}</Text>
-          </View>
-          <View style={[styles.journeyInfoItem, {alignItems: 'center'}]}>
-            <Text style={styles.infoLabel}>PLATFORM</Text>
-            <Text style={styles.infoValueBlue}>PF {data?.platform}</Text>
-          </View>
-          <View style={[styles.journeyInfoItem, {alignItems: 'flex-end'}]}>
-            <Text style={styles.infoLabel}>COACH/SEAT</Text>
-            <Text style={styles.infoValue}>{data?.coach} / {data?.seat}</Text>
-          </View>
-        </View>
-        <View style={styles.progressSection}>
-          <View style={styles.progressHeader}>
-            <View style={styles.progressRow}>
-              <Feather name="map-pin" size={14} color={COLORS.textGray} />
-              <Text style={styles.progressText}>{data?.currentLocation || 'Arriving at MGS Junction'}</Text>
+          <View style={styles.journeyInfoRow}>
+            <View style={styles.journeyInfoItem}>
+              <Text style={styles.infoLabel}>DEPARTS</Text>
+              <Text style={styles.infoValue}>{data?.departs}</Text>
             </View>
-            <Text style={styles.etaText}>ETA {data?.eta}</Text>
+            <View style={[styles.journeyInfoItem, {alignItems: 'center'}]}>
+              <Text style={styles.infoLabel}>PLATFORM</Text>
+              <Text style={styles.infoValueBlue}>PF {data?.platform || 'TBD'}</Text>
+            </View>
+            <View style={[styles.journeyInfoItem, {alignItems: 'flex-end'}]}>
+              <Text style={styles.infoLabel}>COACH/SEAT</Text>
+              <Text style={styles.infoValue}>{data?.coach} / {data?.seat}</Text>
+            </View>
           </View>
-          <View style={styles.progressBarBg}>
-            <View style={[styles.progressBarFill, {width: `${data?.progressPct || 60}%`}]} />
-            <View style={[styles.progressDot, {left: `${data?.progressPct || 60}%`}]} />
+          <View style={styles.progressSection}>
+            <View style={styles.progressHeader}>
+              <View style={styles.progressRow}>
+                <Feather name="map-pin" size={14} color={COLORS.textGray} />
+                <Text style={styles.progressText}>{data?.currentLocation || 'Arriving soon'}</Text>
+              </View>
+              <Text style={styles.etaText}>ETA {data?.eta}</Text>
+            </View>
+            <View style={styles.progressBarBg}>
+              <View style={[styles.progressBarFill, {width: `${data?.progressPct || 0}%`}]} />
+              <View style={[styles.progressDot, {left: `${data?.progressPct || 0}%`}]} />
+            </View>
           </View>
         </View>
-      </View>
-      <View style={styles.journeyFooter}>
-        <Text style={styles.journeyFooterText}>{data?.trainName} EXP</Text>
-        <TouchableOpacity style={styles.liveMapBtn}>
-          <Text style={styles.liveMapText}>LIVE MAP</Text>
-        </TouchableOpacity>
+        <View style={[styles.journeyFooter, { paddingVertical: 12 }]}>
+          <TouchableOpacity 
+            style={{ flexDirection: 'row', alignItems: 'center' }} 
+            onPress={() => pnrMutation.mutate(data.pnr)}
+            disabled={pnrMutation.isPending}
+          >
+            {pnrMutation.isPending ? (
+              <ActivityIndicator size="small" color={COLORS.white} />
+            ) : (
+              <>
+                <MaterialCommunityIcons name="refresh" size={18} color={COLORS.white} />
+                <Text style={[styles.journeyFooterText, { marginLeft: 8 }]}>REFRESH</Text>
+              </>
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center' }} onPress={onClear}>
+            <MaterialIcons name="delete-outline" size={18} color={COLORS.white} />
+            <Text style={[styles.journeyFooterText, { marginLeft: 8 }]}>CLEAR</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     </View>
-  </View>
-);
+  );
+}
 
 const OnlineUtilitiesSection = ({ onExchangePress, onConnectingPress }: { onExchangePress: () => void, onConnectingPress: () => void }) => (
   <View style={styles.sectionContainer}>

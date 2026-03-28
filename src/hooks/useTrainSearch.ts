@@ -7,6 +7,17 @@ interface TrainSearchParams {
   date: string;
 }
 
+export interface Train {
+  trainNumber: string;
+  trainName: string;
+  type: string;
+  duration: string;
+  departure: { time: string; station: string };
+  arrival: { time: string; station: string };
+  runningDays: Record<string, boolean>;
+  classes: string[];
+}
+
 export const useTrainSearch = (params: TrainSearchParams) => {
   const { from, to, date } = params;
 
@@ -16,7 +27,8 @@ export const useTrainSearch = (params: TrainSearchParams) => {
       const response = await apiClient.get('trains/search', {
         params: { from, to, date },
       });
-      return response.data;
+      // Handle the server's response wrapper: { success, data, count, error }
+      return response.data.data as Train[];
     },
     // Only enable query if all parameters are provided
     enabled: !!from && !!to && !!date,

@@ -16,6 +16,7 @@ export interface JourneyData {
   coach: string;
   seat: string;
   statusTag?: string;
+  subText?: string;
   currentLocation?: string;
   eta?: string;
   progressPct?: number;
@@ -29,14 +30,17 @@ export const usePnrStatus = (
 ) => {
   return useMutation({
     mutationFn: async (pnr: string) => {
-      if (pnr.length !== 10) throw new Error('Enter valid 10-digit PNR');
+      // Validate PNR (must be exactly 10 digits)
+      if (!/^\d{10}$/.test(pnr)) {
+        throw new Error('Enter valid 10-digit PNR');
+      }
       
-      const response = await apiClient.get(`/api/pnr/${pnr}`);
+      const response = await apiClient.get(`pnr/${pnr}`);
       const raw = response.data.data;
       
-      // Map backend fields to frontend JourneyData
+      // Map backend fields to frontend JourneyData precisely
       const journey: JourneyData = {
-        pnr: raw.pnr,
+        pnr,
         trainNo: raw.trainNumber,
         trainName: raw.trainName,
         sourceCode: raw.from.code,
@@ -49,9 +53,13 @@ export const usePnrStatus = (
         coach: raw.coach,
         seat: raw.seat,
         statusTag: raw.status,
+        subText: raw.subText,
+        currentLocation: raw.currentLocation,
+        eta: raw.eta,
+        progressPct: raw.progressPct,
       };
       
-      // Store cleaned journey object with metadata in AsyncStorage
+      // Store journey object with metadata in AsyncStorage
       const storageData = {
         journey,
         cachedAt: Date.now()
@@ -75,13 +83,20 @@ export const getCachedJourney = async (): Promise<JourneyData | null> => {
     const data = await AsyncStorage.getItem(STORAGE_KEY);
     if (!data) return null;
     const parsed = JSON.parse(data);
+    // Return ONLY the journey object as requested, or the whole parsed object if needed.
+    // The prompt says: "getCachedJourney() - Read from AsyncStorage - Parse JSON safely - Return null if invalid or missing"
+    // And on success: "Store metadata: { journey: {...}, cachedAt: Date.now() }"
     return parsed.journey || null;
   } catch (e) {
-    console.error('Error parsing cached journey', e);
+    console.error('[PNR Cache] Error parsing journey:', e);
     return null;
   }
 };
 
 export const clearActiveJourney = async () => {
-  await AsyncStorage.removeItem(STORAGE_KEY);
+  try {
+    await AsyncStorage.removeItem(STORAGE_KEY);
+  } catch (e) {
+    console.error('[PNR Cache] Error clearing journey:', e);
+  }
 };

@@ -43,7 +43,7 @@ export default function TrainListScreen() {
     date: `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`,
   });
 
-  const trains = data?.data || [];
+  const trains = data || [];
 
   const renderHeader = () => (
     <View style={styles.resultsCardContainer}>
@@ -110,7 +110,7 @@ export default function TrainListScreen() {
       <View style={{ flex: 1, backgroundColor: COLORS.background }}>
         <FlatList
           data={trains}
-          keyExtractor={(item) => String(item.trainNumber || item.trainNo)}
+          keyExtractor={(item) => String(item.trainNumber)}
           renderItem={({ item }) => <TrainCard train={item} />}
           ListHeaderComponent={renderHeader}
           ListEmptyComponent={!isLoading ? renderEmptyState : null}
@@ -140,7 +140,7 @@ const TrainCard = ({ train }: { train: any }) => {
   const days = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
   const dayKeys = ['M', 'Tu', 'W', 'Th', 'F', 'Sa', 'Su'];
   
-  const trainNo = train.trainNumber || train.trainNo;
+  const trainNo = train.trainNumber;
   const depTime = train.departure?.time || train.depTime;
   const arrTime = train.arrival?.time || train.arrTime;
   const depCode = train.departure?.station || train.depCode;
