@@ -1,0 +1,14 @@
+import axios from 'axios';
+
+// Replace with your computer's local IP address to allow the emulator to connect
+const BASE_URL = 'http://localhost:3000/api';
+
+const apiClient = axios.create({
+  baseURL: BASE_URL,
+  timeout: 5000,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+export default apiClient;

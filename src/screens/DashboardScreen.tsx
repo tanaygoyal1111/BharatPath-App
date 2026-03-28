@@ -1,10 +1,12 @@
-import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Dimensions, StatusBar, Platform, Modal, ActivityIndicator } from 'react-native';
+import React, { useState, useMemo } from 'react';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Dimensions, StatusBar, Platform, Modal, ActivityIndicator, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import OfflineDashboard from './OfflineDashboard';
 import { useJourneyData } from '../hooks/useJourneyData';
+import { useStationSearch } from '../hooks/useStationSearch';
+import masterMap from '../api/bharatpath_master_map.json';
 
 const { width } = Dimensions.get('window');
 
@@ -27,9 +29,9 @@ const COLORS = {
 
 export default function Dashboard() {
   const navigation = useNavigation<any>();
-  const [isOffline, setIsOffline] = useState(true);
+  const [isOffline, setIsOffline] = useState(false);
   const [isTransitioning, setIsTransitioning] = useState(false);
-  const [targetState, setTargetState] = useState(true);
+  const [targetState, setTargetState] = useState(false);
 
   // Injecting our Data Fetching Hook
   const { data, isLoading } = useJourneyData(isOffline);
@@ -141,10 +143,31 @@ const BottomNav = ({ isOffline }: { isOffline: boolean }) => {
   );
 };
 
+const HighlightText = ({ text, highlight }: { text: string; highlight: string }) => {
+  if (!highlight.trim()) return <Text>{text}</Text>;
+  const parts = text.split(new RegExp(`(${highlight})`, 'gi'));
+  return (
+    <Text>
+      {parts.map((part, i) => (
+        <Text key={i} style={part.toLowerCase() === highlight.toLowerCase() ? { fontWeight: '900', color: COLORS.primary } : {}}>
+          {part}
+        </Text>
+      ))}
+    </Text>
+  );
+};
+
 const SearchHubCard = () => {
+  const navigation = useNavigation<any>();
   const [activeTab, setActiveTab] = useState<'station' | 'pnr'>('station');
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date());
+
+  // Station Search Hooks
+  const fromSearch = useStationSearch('NDLS');
+  const toSearch = useStationSearch('BSB');
+
+  const isSearchDisabled = !fromSearch.isValid || !toSearch.isValid;
 
   const weekDays = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
   const mockDays = Array.from({length: 31}, (_, i) => i + 1);
@@ -153,6 +176,15 @@ const SearchHubCard = () => {
     const newDate = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), day);
     setSelectedDate(newDate);
     setShowDatePicker(false);
+  };
+
+  const handleSearch = () => {
+    if (isSearchDisabled) return;
+    navigation.navigate('TrainList', {
+      from: fromSearch.query,
+      to: toSearch.query,
+      date: selectedDate.toISOString()
+    });
   };
 
   const handleTodayPress = () => setSelectedDate(new Date());
@@ -194,26 +226,73 @@ const SearchHubCard = () => {
       {activeTab === 'station' ? (
         <View>
           <View style={styles.inputsWrapper}>
-            <View style={styles.inputBoxTop}>
+            <View style={[styles.inputBoxTop, { zIndex: 100 }]}>
               <View style={styles.inputLeft}>
                 <Feather name="map-pin" size={18} color={COLORS.textLightGray} />
                 <View style={styles.inputTextWrapper}>
                   <Text style={styles.inputLabel}>FROM STATION</Text>
-                  <Text style={styles.inputValue}>NDLS</Text>
+                  <TextInput 
+                    style={styles.inputValue}
+                    value={fromSearch.query}
+                    onChangeText={(text) => fromSearch.setQuery(text.toUpperCase())}
+                    onFocus={() => {
+                      fromSearch.setShowSuggestions(true);
+                      toSearch.setShowSuggestions(false);
+                    }}
+                    placeholder="NDLS"
+                  />
                 </View>
               </View>
+              {fromSearch.showSuggestions && fromSearch.suggestions.length > 0 && (
+                <View style={styles.suggestionBox}>
+                  {fromSearch.suggestions.map(s => (
+                    <TouchableOpacity key={s.code} onPress={() => fromSearch.selectStation(s.code)} style={styles.suggestionItem}>
+                      <Text style={styles.suggestionText}>
+                        <HighlightText text={s.code} highlight={fromSearch.query} /> - <Text style={{fontWeight: '400', color: COLORS.textGray}}><HighlightText text={s.name} highlight={fromSearch.query} /></Text>
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
             </View>
             <View style={styles.inputDividerWrapper}><View style={styles.inputDivider} /></View>
-            <View style={styles.inputBoxBottom}>
+            <View style={[styles.inputBoxBottom, { zIndex: 90 }]}>
               <View style={styles.inputLeft}>
                 <Feather name="navigation" size={18} color={COLORS.textLightGray} style={{transform: [{rotate: '45deg'}], marginLeft: -2}} />
                 <View style={[styles.inputTextWrapper, {marginLeft: 14}]}>
                   <Text style={styles.inputLabel}>TO STATION</Text>
-                  <Text style={styles.inputValue}>BSB</Text>
+                  <TextInput 
+                    style={styles.inputValue}
+                    value={toSearch.query}
+                    onChangeText={(text) => toSearch.setQuery(text.toUpperCase())}
+                    onFocus={() => {
+                      toSearch.setShowSuggestions(true);
+                      fromSearch.setShowSuggestions(false);
+                    }}
+                    placeholder="BSB"
+                  />
                 </View>
               </View>
+              {toSearch.showSuggestions && toSearch.suggestions.length > 0 && (
+                <View style={[styles.suggestionBox, { top: 55 }]}>
+                  {toSearch.suggestions.map(s => (
+                    <TouchableOpacity key={s.code} onPress={() => toSearch.selectStation(s.code)} style={styles.suggestionItem}>
+                      <Text style={styles.suggestionText}>
+                        <HighlightText text={s.code} highlight={toSearch.query} /> - <Text style={{fontWeight: '400', color: COLORS.textGray}}><HighlightText text={s.name} highlight={toSearch.query} /></Text>
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
             </View>
-            <TouchableOpacity style={styles.swapButton}>
+            <TouchableOpacity 
+              style={styles.swapButton}
+              onPress={() => {
+                const tempFrom = fromSearch.query;
+                fromSearch.setQuery(toSearch.query);
+                toSearch.setQuery(tempFrom);
+              }}
+            >
               <Ionicons name="swap-vertical" size={20} color={COLORS.white} />
             </TouchableOpacity>
           </View>
@@ -243,7 +322,11 @@ const SearchHubCard = () => {
               </TouchableOpacity>
             </View>
           </View>
-          <TouchableOpacity style={styles.searchButton}>
+          <TouchableOpacity 
+            style={[styles.searchButton, isSearchDisabled && { opacity: 0.6 }]} 
+            onPress={handleSearch}
+            disabled={isSearchDisabled}
+          >
             <Text style={styles.searchButtonText}>SEARCH TRAINS</Text>
             <Feather name="arrow-right" size={20} color={COLORS.white} style={{marginLeft: 8}} />
           </TouchableOpacity>
@@ -482,7 +565,7 @@ const styles = StyleSheet.create({
   inactiveTab: { flex: 1, paddingVertical: 12, alignItems: 'center', justifyContent: 'center' },
   activeTabText: { color: COLORS.white, fontWeight: '800', fontSize: 13 },
   inactiveTabText: { color: COLORS.textGray, fontWeight: '700', fontSize: 13 },
-  inputsWrapper: { marginTop: 20, backgroundColor: COLORS.inputBg, borderRadius: 20 },
+  inputsWrapper: { marginTop: 20, backgroundColor: COLORS.inputBg, borderRadius: 20, position: 'relative' },
   inputBoxTop: { padding: 18 },
   inputBoxBottom: { padding: 18 },
   inputDividerWrapper: { paddingHorizontal: 52 },
@@ -490,8 +573,8 @@ const styles = StyleSheet.create({
   inputLeft: { flexDirection: 'row', alignItems: 'center' },
   inputTextWrapper: { marginLeft: 16 },
   inputLabel: { fontSize: 11, color: COLORS.primary, fontWeight: '700', marginBottom: 4, letterSpacing: 0.5 },
-  inputValue: { fontSize: 18, fontWeight: '900', color: COLORS.textDark },
-  swapButton: { position: 'absolute', right: 24, top: '50%', marginTop: -24, width: 48, height: 48, borderRadius: 24, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center' },
+  inputValue: { fontSize: 18, fontWeight: '900', color: COLORS.textDark, minWidth: 100 },
+  swapButton: { position: 'absolute', right: 24, top: '50%', marginTop: -24, width: 48, height: 48, borderRadius: 24, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center', zIndex: 200 },
   dateRow: { flexDirection: 'row', gap: 12, marginTop: 16 },
   dateBox: { flex: 1.2, flexDirection: 'row', backgroundColor: COLORS.inputBg, borderRadius: 18, padding: 16, alignItems: 'center' },
   dateTextRow: { flexDirection: 'row', alignItems: 'baseline' },
@@ -564,4 +647,9 @@ const styles = StyleSheet.create({
   dayCellSelected: { backgroundColor: COLORS.primary, borderRadius: 16 },
   dayText: { fontSize: 14, fontWeight: '700', color: COLORS.textDark },
   dayTextSelected: { color: COLORS.white, fontWeight: '900' },
+
+  // --- AUTOCOMPLETE STYLES ---
+  suggestionBox: { position: 'absolute', top: 55, left: 0, right: 0, backgroundColor: COLORS.white, borderRadius: 12, elevation: 5, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10, zIndex: 1000, borderWidth: 1, borderColor: COLORS.divider },
+  suggestionItem: { paddingVertical: 12, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: COLORS.background },
+  suggestionText: { fontSize: 13, fontWeight: '800', color: COLORS.primary },
 });

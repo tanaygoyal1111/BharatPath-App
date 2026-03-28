@@ -1,0 +1,98 @@
+[
+  {
+    "trainNo": "22436",
+    "trainName": "VANDE BHARAT EXP",
+    "route": "NEW DELHI - VARANASI JN",
+    "depTime": "06:00",
+    "arrTime": "14:00",
+    "depCode": "NDLS",
+    "arrCode": "BSB",
+    "duration": "08h 00m",
+    "runningDays": [true, true, true, false, true, true, true],
+    "isMoon": false
+  },
+  {
+    "trainNo": "12259",
+    "trainName": "SEALDAH DURONTO",
+    "route": "NDLS - BSB SECTOR",
+    "depTime": "18:15",
+    "arrTime": "06:45",
+    "depCode": "NDLS",
+    "arrCode": "BSB",
+    "duration": "12h 30m",
+    "runningDays": [true, true, true, true, true, false, false],
+    "isMoon": true
+  },
+  {
+    "trainNo": "12424",
+    "trainName": "DBRT RAJDHANI",
+    "route": "NEW DELHI - VARANASI",
+    "depTime": "16:20",
+    "arrTime": "01:35",
+    "depCode": "NDLS",
+    "arrCode": "BSB",
+    "duration": "09h 15m",
+    "runningDays": [true, true, true, true, true, true, true],
+    "isMoon": true
+  },
+  {
+    "trainNo": "12560",
+    "trainName": "SHIV GANGA EXP",
+    "route": "NEW DELHI - MANDUADIH",
+    "depTime": "20:05",
+    "arrTime": "06:10",
+    "depCode": "NDLS",
+    "arrCode": "MUV",
+    "duration": "10h 05m",
+    "runningDays": [true, true, true, true, true, true, true],
+    "isMoon": true
+  },
+  {
+    "trainNo": "12582",
+    "trainName": "NDLS BSB SF EXP",
+    "route": "NEW DELHI - VARANASI",
+    "depTime": "22:50",
+    "arrTime": "10:00",
+    "depCode": "NDLS",
+    "arrCode": "BSB",
+    "duration": "11h 10m",
+    "runningDays": [true, true, true, true, true, true, true],
+    "isMoon": true
+  },
+  {
+    "trainNo": "15160",
+    "trainName": "SARNATH EXP",
+    "route": "CPR - BSB - ADL",
+    "depTime": "09:00",
+    "arrTime": "12:00",
+    "depCode": "ALD",
+    "arrCode": "BSB",
+    "duration": "03h 00m",
+    "runningDays": [true, true, true, true, true, true, true],
+    "isMoon": false
+  },
+  {
+    "trainNo": "14212",
+    "trainName": "INTERCITY EXP",
+    "route": "NDLS - Agra - BSB",
+    "depTime": "05:40",
+    "arrTime": "21:15",
+    "depCode": "NDLS",
+    "arrCode": "BSB",
+    "duration": "15h 35m",
+    "runningDays": [true, true, true, true, true, true, true],
+    "isMoon": false
+  },
+  {
+    "trainNo": "12382",
+    "trainName": "POORVA EXP",
+    "route": "NDLS - Gaya - HWH",
+    "depTime": "17:40",
+    "arrTime": "05:00",
+    "depCode": "NDLS",
+    "arrCode": "BSB",
+    "duration": "11h 20m",
+    "runningDays": [true, false, true, true, false, false, true],
+    "isMoon": true
+  }
+]
