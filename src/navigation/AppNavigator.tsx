@@ -7,6 +7,7 @@ import HelpScreen from '../screens/HelpScreen';
 import SeatExchangeScreen from '../screens/SeatExchangeScreen';
 import ConnectingJourneyScreen from '../screens/ConnectingJourneyScreen';
 import TrainListScreen from '../screens/TrainListScreen';
+import LiveStatusScreen from '../screens/LiveStatusScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -19,6 +20,7 @@ export default function AppNavigator() {
       <Stack.Screen name="SeatExchange" component={SeatExchangeScreen} />
       <Stack.Screen name="ConnectingJourney" component={ConnectingJourneyScreen} />
       <Stack.Screen name="TrainList" component={TrainListScreen} />
+      <Stack.Screen name="LiveStatus" component={LiveStatusScreen} />
     </Stack.Navigator>
   );
 }

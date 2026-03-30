@@ -200,7 +200,7 @@ const BottomNav = ({ isOffline }: { isOffline: boolean }) => {
         {!isOffline ? <Text style={styles.navTextActiveOnline}>HOME</Text> : null}
       </TouchableOpacity>
       
-      <TouchableOpacity style={styles.navItemWrap}>
+      <TouchableOpacity style={styles.navItemWrap} onPress={() => navigation.navigate('LiveStatus')}>
         <MaterialIcons name="wifi-tethering" size={24} color={COLORS.textLightGray} />
         <Text style={styles.navText}>LIVE STATUS</Text>
       </TouchableOpacity>
@@ -503,6 +503,7 @@ function SearchHubCard({ activeJourney, onJourneyUpdate }: { activeJourney: Jour
 }
 
 const OnlineActiveJourneyCard = ({ data, onClear, onRefresh, status }: { data: JourneyData, onClear: () => void, onRefresh: (j: JourneyData) => void, status: string }) => {
+  const navigation = useNavigation<any>();
   const pnrMutation = usePnrStatus(
     (updated) => onRefresh(updated),
     (err) => Alert.alert('Refresh Failed', err.message || 'Check connection')
@@ -700,7 +701,7 @@ const OnlineActiveJourneyCard = ({ data, onClear, onRefresh, status }: { data: J
                 </>
               )}
             </TouchableOpacity>
-            <TouchableOpacity style={styles.liveMapBtn}>
+            <TouchableOpacity style={styles.liveMapBtn} onPress={() => navigation.navigate('LiveStatus')}>
               <Text style={styles.liveMapText}>LIVE MAP</Text>
             </TouchableOpacity>
           </View>
