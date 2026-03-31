@@ -7,6 +7,7 @@ import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import PrimaryButton from './PrimaryButton';
 import InputField from './InputField';
 import OTPInputRow from './OTPInputRow';
+import { supabase } from '../../lib/supabase';
 
 interface AuthModalProps {
   visible: boolean;
@@ -42,6 +43,9 @@ export default function AuthModal({ visible, onClose, onSuccess }: AuthModalProp
   const [isVerifying, setIsVerifying] = useState(false);
   const [resendTimer, setResendTimer] = useState(0);
 
+  // Error State Handling
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
   // Validate Email Live
   useEffect(() => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -55,6 +59,7 @@ export default function AuthModal({ visible, onClose, onSuccess }: AuthModalProp
        setEmail('');
        setOtp(['', '', '', '', '', '']);
        setResendTimer(0);
+       setErrorMsg(null);
     }
   }, [visible]);
 
@@ -71,13 +76,17 @@ export default function AuthModal({ visible, onClose, onSuccess }: AuthModalProp
   const handleSendOTP = async () => {
     if (!isEmailValid) return;
     setIsSending(true);
+    setErrorMsg(null);
     try {
-      await new Promise(res => setTimeout(res, 1200)); 
+      const { error } = await supabase.auth.signInWithOtp({ email });
+      if (error) throw error;
+
       setView('OTP');
       setResendTimer(30);
       setOtp(['', '', '', '', '', '']); 
-    } catch (err) { } 
-    finally {
+    } catch (err: any) { 
+      setErrorMsg(err.message || 'Failed to send OTP.');
+    } finally {
       setIsSending(false);
     }
   };
@@ -87,11 +96,15 @@ export default function AuthModal({ visible, onClose, onSuccess }: AuthModalProp
     if (code.length < 6) return;
     
     setIsVerifying(true);
+    setErrorMsg(null);
     try {
-      await new Promise(res => setTimeout(res, 1200)); 
+      const { error } = await supabase.auth.verifyOtp({ email, token: code, type: 'email' });
+      if (error) throw error;
+      
       onSuccess(); 
-    } catch (err) { } 
-    finally {
+    } catch (err: any) { 
+      setErrorMsg(err.message || 'Invalid or expired OTP.');
+    } finally {
       setIsVerifying(false);
     }
   };
@@ -132,12 +145,18 @@ export default function AuthModal({ visible, onClose, onSuccess }: AuthModalProp
       </View>
 
       <View style={styles.inputSection}>
+        {errorMsg && (
+          <View style={styles.errorBannerGroup}>
+            <Feather name="alert-circle" size={14} color="#DC2626" />
+            <Text style={styles.errorBannerText}>{errorMsg}</Text>
+          </View>
+        )}
         <Text style={styles.inputLabel}>ENTER YOUR EMAIL</Text>
         <InputField 
            iconName="mail"
            placeholder="user@railway.com"
            value={email}
-           onChangeText={setEmail}
+           onChangeText={(t) => { setEmail(t); setErrorMsg(null); }}
            keyboardType="email-address"
         />
       </View>
@@ -181,10 +200,17 @@ export default function AuthModal({ visible, onClose, onSuccess }: AuthModalProp
       </View>
 
       <View style={styles.otpBoxSection}>
+        {errorMsg && (
+          <View style={[styles.errorBannerGroup, { marginBottom: 16 }]}>
+            <Feather name="alert-circle" size={14} color="#DC2626" />
+            <Text style={styles.errorBannerText}>{errorMsg}</Text>
+          </View>
+        )}
         <OTPInputRow 
            length={6} 
            value={otp.join('')} 
            onCodeChange={(code) => {
+             setErrorMsg(null);
              const newOtp = code.split('').concat(Array(6 - code.length).fill(''));
              setOtp(newOtp);
            }} 
@@ -457,5 +483,22 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: COLORS.textMuted,
     letterSpacing: 1,
+  },
+  errorBannerGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEF2F2',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  errorBannerText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#DC2626',
+    marginLeft: 8,
+    flex: 1,
   },
 });

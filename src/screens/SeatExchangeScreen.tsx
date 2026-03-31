@@ -24,11 +24,13 @@ export default function SeatExchangeScreen() {
   const navigation = useNavigation();
   const [pnr, setPnr] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
+  const [pnrError, setPnrError] = useState<string | null>(null);
   const [requestId, setRequestId] = useState<string | null>(null);
 
   const handleVerifyPnr = async () => {
+    setPnrError(null);
     if (pnr.length !== 10) {
-      Alert.alert('Invalid PNR', 'Please enter a valid 10-digit PNR number.');
+      setPnrError('Please enter a valid 10-digit PNR number.');
       return;
     }
     setIsVerifying(true);
@@ -49,7 +51,7 @@ export default function SeatExchangeScreen() {
          } catch(e) {}
       }
       console.log("EDGE FXN ERROR =>", debugMessage);
-      Alert.alert('Verification Failed', debugMessage);
+      setPnrError(debugMessage || 'PNR Verification Failed');
     } finally {
       setIsVerifying(false);
     }
@@ -77,6 +79,13 @@ export default function SeatExchangeScreen() {
               </View>
               <MaterialCommunityIcons name="shield-check-outline" size={28} color="#94A3B8" />
             </View>
+
+            {pnrError && (
+              <View style={styles.errorBanner}>
+                 <Feather name="alert-circle" size={16} color="#DC2626" />
+                 <Text style={styles.errorBannerText}>{pnrError}</Text>
+              </View>
+            )}
 
             <View style={styles.inputContainer}>
               <TextInput 
@@ -170,6 +179,7 @@ const VerifiedSeatExchangeView = ({ pnr, requestId }: VerifiedViewProps) => {
   const [isFinding, setIsFinding] = useState(false);
   const [swapStatus, setSwapStatus] = useState<'IDLE' | 'COMPLETED'>('IDLE');
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
+  const [apiError, setApiError] = useState<string | null>(null);
 
   // Listen to Real-Time matches
   useEffect(() => {
@@ -228,23 +238,20 @@ const VerifiedSeatExchangeView = ({ pnr, requestId }: VerifiedViewProps) => {
 
   const handleFindMatches = async () => {
     setIsFinding(true);
+    setApiError(null);
     setMatches([]);
     try {
       const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("You must be signed in to access Seat Exchange.");
 
       const prefBerth = berth.match(/\(([^)]+)\)/)?.[1] || berth;
       const seatNoInt = parseInt(seatNum, 10);
       
-      // Because we removed the 'test hacks', the Simulator crashes here if you aren't actually 
-      // logged into Supabase Auth natively yet on the phone! 
-      // We will securely fallback to your confirmed test user ID if the simulator session is empty.
-      const activeUserId = user?.id || 'd7f04ced-5633-4e5c-af5f-a09e449c6b9c';
-
       // Create the live insert via edge function exactly matching production snake_case payload
+      // user_id is implicit via the Supabase Authorization header passed by .invoke() securely!
       const { data, error } = await supabase.functions.invoke('create-seat-request', {
         body: { 
           pnr,
-          user_id: activeUserId,
           train_number: "12259", // Derived from PNR in final app
           journey_date: "2026-04-20", // Derived
           train_class: "3AC", // Derived
@@ -276,7 +283,7 @@ const VerifiedSeatExchangeView = ({ pnr, requestId }: VerifiedViewProps) => {
         p_train_class: "3A",   
         p_my_berth: "SU",       
         p_target_preference: prefBerth,
-        p_current_user_id: activeUserId 
+        p_current_user_id: user.id 
       });
 
       if (!rpcError && dbMatches) {
@@ -284,13 +291,14 @@ const VerifiedSeatExchangeView = ({ pnr, requestId }: VerifiedViewProps) => {
       }
       
     } catch (err: any) {
-      Alert.alert('Matching Error', err.message || 'Failed to initialize request');
+      setApiError(err.message || 'Failed to initialize request');
     } finally {
       setIsFinding(false);
     }
   };
 
   const handleAcceptSwap = async (matchId: string) => {
+    setApiError(null);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("You must be logged in to accept swaps.");
@@ -302,11 +310,13 @@ const VerifiedSeatExchangeView = ({ pnr, requestId }: VerifiedViewProps) => {
 
       if (error) {
         if (error.message.includes('MATCH_EXPIRED')) {
-          Alert.alert('Too late!', 'This match has expired or was accepted by someone else.');
+          setApiError('This match has expired or was accepted by someone else.');
         } else if (error.message.includes('UNAUTHORIZED_ACTION')) {
-          Alert.alert('Security Alert', 'You are not authorized to perform this action.');
+          setApiError('Security Alert: You are not authorized to perform this action.');
+        } else if (error.message.includes('MATCH_ALREADY_RESOLVED')) {
+          setApiError('This match has already been resolved and taken.');
         } else {
-          Alert.alert('Error', error.message);
+          setApiError(error.message);
         }
         return;
       }
@@ -314,7 +324,7 @@ const VerifiedSeatExchangeView = ({ pnr, requestId }: VerifiedViewProps) => {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setSwapStatus('COMPLETED');
     } catch (err: any) {
-      Alert.alert('Swap Error', err.message);
+      setApiError(err.message || 'Swap Error occurred.');
     }
   };
 
@@ -342,7 +352,14 @@ const VerifiedSeatExchangeView = ({ pnr, requestId }: VerifiedViewProps) => {
   return (
     <Animated.View entering={FadeIn} style={styles.verifiedContainer}>
       
-      <View style={[styles.sectionCard, { paddingVertical: 16 }]}>
+      {apiError && (
+        <View style={[styles.errorBanner, { marginHorizontal: 16, marginTop: 16 }]}>
+           <Feather name="alert-circle" size={16} color="#DC2626" />
+           <Text style={styles.errorBannerText}>{apiError}</Text>
+        </View>
+      )}
+
+      <View style={[styles.sectionCard, { paddingVertical: 16, marginTop: apiError ? 0 : 16 }]}>
         <View style={styles.infoLeftBorder} />
         <View style={styles.statusTextWrap}>
            <Text style={styles.statusLabelSmall}>VERIFICATION STATUS</Text>
@@ -599,6 +616,8 @@ const styles = StyleSheet.create({
   cardSectionTitle: { fontSize: 12, fontWeight: '800', color: COLORS.textDark, letterSpacing: 0.5, marginLeft: 8 },
   inputRow: { flexDirection: 'row', justifyContent: 'space-between' },
   inputLabel: { fontSize: 10, fontWeight: '800', color: COLORS.textGray, letterSpacing: 0.5, marginBottom: 8 },
+  errorBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FEF2F2', padding: 12, borderRadius: 8, marginBottom: 20, borderWidth: 1, borderColor: '#FECACA' },
+  errorBannerText: { fontSize: 12, fontWeight: '600', color: '#DC2626', marginLeft: 8, flex: 1 },
   dropdownBox: {
     flexDirection: 'row',
     justifyContent: 'space-between',
