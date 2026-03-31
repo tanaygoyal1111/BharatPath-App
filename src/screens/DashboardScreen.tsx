@@ -7,6 +7,8 @@ import OfflineDashboard from './OfflineDashboard';
 import { useStationSearch } from '../hooks/useStationSearch';
 import { usePnrStatus, getCachedJourney, clearActiveJourney, JourneyData } from '../hooks/usePnrStatus';
 import masterMap from '../api/bharatpath_master_map.json';
+import { supabase } from '../lib/supabase';
+import AuthModal from '../components/Auth/AuthModal';
 
 const { width } = Dimensions.get('window');
 
@@ -35,6 +37,9 @@ export default function Dashboard() {
   const [isOffline, setIsOffline] = useState(false);
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [targetState, setTargetState] = useState(false);
+
+  // Auth State for gatekeeping
+  const [showAuthModal, setShowAuthModal] = useState(false);
 
   // Active Journey State
   const [activeJourney, setActiveJourney] = useState<JourneyData | null>(null);
@@ -89,6 +94,18 @@ export default function Dashboard() {
         }
       ]
     );
+  };
+
+  const handleSeatExchangePress = async () => {
+    // Protected Feature Rule: Check for active session before allowing entry
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      // User is a guest - strictly block navigation and trigger modal
+      setShowAuthModal(true);
+    } else {
+      // Authenticated user
+      navigation.navigate('SeatExchange');
+    }
   };
 
   if (isHydrating) {
@@ -175,7 +192,7 @@ export default function Dashboard() {
               )}
 
               <OnlineUtilitiesSection 
-                onExchangePress={() => navigation.navigate('SeatExchange')} 
+                onExchangePress={handleSeatExchangePress} 
                 onConnectingPress={() => navigation.navigate('ConnectingJourney')}
               />
             </ScrollView>
@@ -184,6 +201,20 @@ export default function Dashboard() {
         {/* Unified Bottom Nav */}
         <BottomNav isOffline={isOffline} />
       </View>
+
+      {/* Strict Auth Gatekeeper Modal */}
+      <AuthModal 
+         visible={showAuthModal}
+         onClose={() => {
+            // "Continue as Guest" closes the modal safely returning them to Dashboard natively
+            setShowAuthModal(false);
+         }}
+         onSuccess={() => {
+            // Once logged in, seamlessly forward their active intent automatically
+            setShowAuthModal(false);
+            navigation.navigate('SeatExchange');
+         }}
+      />
     </SafeAreaView>
   );
 }
