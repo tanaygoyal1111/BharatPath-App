@@ -20,6 +20,29 @@ const COLORS = {
   successGreen: '#22C55E',
 };
 
+const generatePNR = () => {
+  return Math.floor(1000000000 + Math.random() * 9000000000).toString();
+};
+
+const generateSeatFromPNR = (pnr: string) => {
+  const seed = parseInt(pnr.slice(-3)) || 0;
+  const coaches = ["B1", "B2", "B3", "B4", "B5"];
+  const berthTypes = ["Lower Berth (LB)", "Upper Berth (UB)", "Side Lower (SL)", "Side Upper (SU)"];
+
+  const coach = coaches[seed % coaches.length];
+  const seat_no = (seed % 72) + 1;
+  const berth_type = berthTypes[seed % berthTypes.length];
+
+  return { coach, seat_no, berth_type };
+};
+
+const generateTestPair = () => {
+  return [
+    { berth_type: "LB", preference: "SU" },
+    { berth_type: "SU", preference: "LB" }
+  ];
+};
+
 export default function SeatExchangeScreen() {
   const navigation = useNavigation();
   const [pnr, setPnr] = useState('');
@@ -168,18 +191,29 @@ const SkeletonCard = () => {
 }
 
 const VerifiedSeatExchangeView = ({ pnr, requestId }: VerifiedViewProps) => {
-  const [berth, setBerth] = useState('Lower Berth (LB)');
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => setCurrentUserId(data.user?.id || null));
+  }, []);
+
+  const [isTestMode, setIsTestMode] = useState(false);
+  const defaultSeat = generateSeatFromPNR(pnr);
+
+  const [berth, setBerth] = useState(defaultSeat.berth_type);
   const [showBerthDropdown, setShowBerthDropdown] = useState(false);
   const berthOptions = ['Lower Berth (LB)', 'Middle Berth (MB)', 'Upper Berth (UB)', 'Side Lower (SL)', 'Side Upper (SU)'];
   
-  const [coach, setCoach] = useState('B4');
-  const [seatNum, setSeatNum] = useState('22');
+  const [coach, setCoach] = useState(defaultSeat.coach);
+  const [seatNum, setSeatNum] = useState(defaultSeat.seat_no.toString());
 
   const [matches, setMatches] = useState<any[]>([]);
   const [isFinding, setIsFinding] = useState(false);
   const [swapStatus, setSwapStatus] = useState<'IDLE' | 'COMPLETED'>('IDLE');
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
+  
+  const [isCreatingTest, setIsCreatingTest] = useState(false);
 
   // Listen to Real-Time matches
   useEffect(() => {
@@ -236,96 +270,198 @@ const VerifiedSeatExchangeView = ({ pnr, requestId }: VerifiedViewProps) => {
     };
   }, [activeRequestId, berth]);
 
-  const handleFindMatches = async () => {
+  const fetchMatches = async () => {
     setIsFinding(true);
     setApiError(null);
-    setMatches([]);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("You must be signed in to access Seat Exchange.");
+      const { data: sessionData } = await supabase.auth.getSession();
+      const user = sessionData.session?.user;
+
+      if (!user) {
+        setApiError("User not logged in");
+        return;
+      }
 
       const prefBerth = berth.match(/\(([^)]+)\)/)?.[1] || berth;
-      const seatNoInt = parseInt(seatNum, 10);
-      
-      // Create the live insert via edge function exactly matching production snake_case payload
-      // user_id is implicit via the Supabase Authorization header passed by .invoke() securely!
-      const { data, error } = await supabase.functions.invoke('create-seat-request', {
-        body: { 
-          pnr,
-          train_number: "12259", // Derived from PNR in final app
-          journey_date: "2026-04-20", // Derived
-          train_class: "3AC", // Derived
-          coach: coach,
-          seat_no: seatNoInt,
-          berth_type: "LB", // Derived
-          preference: prefBerth
-        },
-      });
 
-      if (error) {
-           let debugMessage = error.message;
-           if (error instanceof Error && 'context' in error) {
-              try {
-                const contextObj = await (error as any).context.json();
-                debugMessage = contextObj.error || JSON.stringify(contextObj);
-              } catch(e) {}
-           }
-           throw new Error(debugMessage);
-      }
-
-      const newRequestId = data?.[0]?.id || data?.id;
-      setActiveRequestId(newRequestId);
-      
-      // Fallback: Check if the trigger already generated matches instantly
-      const { data: dbMatches, error: rpcError } = await supabase.rpc('find_seat_matches', {
-        p_train_number: "12259", 
-        p_journey_date: "2026-04-20",
-        p_train_class: "3A",   
-        p_my_berth: "SU",       
+      const { data, error } = await supabase.rpc('find_seat_matches', {
+        p_train_number: isTestMode ? "12345" : "12259",
+        p_journey_date: isTestMode ? "2026-04-01" : "2026-04-20",
+        p_train_class: isTestMode ? "3AC" : "3A",
+        p_my_berth: isTestMode ? "LB" : "LB",
         p_target_preference: prefBerth,
-        p_current_user_id: user.id 
+        p_current_user_id: user.id
       });
 
-      if (!rpcError && dbMatches) {
-        // We set manually resolved data for now, realtime channel should catch exact insertions ideally.
-      }
-      
+      if (error) throw error;
+
+      setMatches(data || []);
     } catch (err: any) {
-      setApiError(err.message || 'Failed to initialize request');
+      setApiError(err.message || 'Failed to fetch matches.');
     } finally {
       setIsFinding(false);
     }
   };
 
-  const handleAcceptSwap = async (matchId: string) => {
+  const createTestMatch = async () => {
+    setIsCreatingTest(true);
+    setApiError(null);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData.session?.access_token) {
+         throw new Error("No active session token found!");
+      }
+
+      const token = sessionData.session.access_token;
+      const trainNumber = "12345";
+      const journeyDate = "2026-04-01";
+      const trainClass = "3AC";
+      
+      const [userA, userB] = generateTestPair();
+      
+      // USER A
+      await fetch(`${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/create-seat-request`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          pnr: generatePNR(),
+          train_number: trainNumber,
+          journey_date: journeyDate,
+          train_class: trainClass,
+          coach: coach,
+          seat_no: "21",
+          berth_type: userA.berth_type,
+          preference: userA.preference
+        })
+      });
+
+      // USER B (Simulating realistic opposite match mapping)
+      await fetch(`${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/create-seat-request`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          pnr: generatePNR(),
+          train_number: trainNumber,
+          journey_date: journeyDate,
+          train_class: trainClass,
+          coach: "B2",
+          seat_no: "45",
+          berth_type: userB.berth_type,
+          preference: userB.preference
+        })
+      });
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      await fetchMatches();
+    } catch (err: any) {
+      setApiError(err.message || 'Failed to create test match cases.');
+    } finally {
+      setIsCreatingTest(false);
+    }
+  };
+
+  const handleFindMatches = async () => {
+    setIsFinding(true);
     setApiError(null);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("You must be logged in to accept swaps.");
+      if (!user) throw new Error("You must be signed in to access Seat Exchange.");
 
-      const { error } = await supabase.rpc('accept_seat_swap_final', {
-        p_match_id: matchId,
-        p_user_id: user.id,
-      });
-
-      if (error) {
-        if (error.message.includes('MATCH_EXPIRED')) {
-          setApiError('This match has expired or was accepted by someone else.');
-        } else if (error.message.includes('UNAUTHORIZED_ACTION')) {
-          setApiError('Security Alert: You are not authorized to perform this action.');
-        } else if (error.message.includes('MATCH_ALREADY_RESOLVED')) {
-          setApiError('This match has already been resolved and taken.');
-        } else {
-          setApiError(error.message);
-        }
-        return;
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData.session?.access_token) {
+         throw new Error("No active session token found!");
       }
 
+      const token = sessionData.session.access_token;
+      console.log("JWT Token:", token);
+
+      const prefBerth = berth.match(/\(([^)]+)\)/)?.[1] || berth;
+      const seatNoInt = parseInt(seatNum, 10);
+      const pnrToUse = isTestMode ? generatePNR() : pnr;
+      
+      const payload = {
+          pnr: pnrToUse,
+          train_number: isTestMode ? "12345" : "12259",
+          journey_date: isTestMode ? "2026-04-01" : "2026-04-20",
+          train_class: isTestMode ? "3AC" : "3AC",
+          coach: coach,
+          seat_no: seatNoInt,
+          berth_type: isTestMode ? "LB" : "LB",
+          preference: prefBerth
+      };
+
+      console.log("Creating request with:", {
+        pnr: payload.pnr,
+        berth_type: payload.berth_type,
+        preference: payload.preference
+      });
+
+      const response = await fetch(`${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/create-seat-request`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const result = await response.json();
+      console.log("API RESPONSE:", result);
+
+      if (!response.ok) {
+         const errorObjStr = result.error || result.message || "";
+         if (typeof errorObjStr === 'string' && errorObjStr.includes("duplicate key")) {
+            throw new Error("You already created a request for this PNR. Try again later.");
+         }
+         throw new Error(errorObjStr || "API Error");
+      }
+
+      const newRequestId = result?.[0]?.id || result?.id;
+      setActiveRequestId(newRequestId);
+      
+      await fetchMatches();
+    } catch (err: any) {
+      setApiError(err.message || 'Failed to initialize request');
+      setIsFinding(false); 
+    }
+  };
+
+  const [isAccepting, setIsAccepting] = useState(false);
+
+  const handleAcceptSwap = async (otherRequestId: string) => {
+    setIsAccepting(true);
+    setApiError(null);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const user = sessionData.session?.user;
+      if (!user) throw new Error("You must be logged in to accept swaps.");
+
+      const { error } = await supabase.rpc('create_match', {
+        p_request_a: activeRequestId,
+        p_request_b: otherRequestId
+      });
+
+      if (error) throw error;
+
+      // Remove from UI instantly
+      setMatches(prev => prev.filter(m => m.id !== otherRequestId));
+      
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setSwapStatus('COMPLETED');
     } catch (err: any) {
       setApiError(err.message || 'Swap Error occurred.');
+    } finally {
+      setIsAccepting(false);
     }
+  };
+
+  const ignoreMatch = (id: string) => {
+    setMatches(prev => prev.filter(m => m.id !== id));
   };
 
   if (swapStatus === 'COMPLETED') {
@@ -445,10 +581,30 @@ const VerifiedSeatExchangeView = ({ pnr, requestId }: VerifiedViewProps) => {
         </View>
       </View>
 
-      <TouchableOpacity style={styles.findMatchesButton} onPress={handleFindMatches} disabled={isFinding}>
-        <Text style={styles.verifyButtonText}>{isFinding ? 'FINDING...' : 'FIND MATCHES'}</Text>
+      <TouchableOpacity style={styles.findMatchesButton} onPress={handleFindMatches} disabled={isFinding || isCreatingTest}>
+        {isFinding ? <ActivityIndicator color={COLORS.white} /> : <Text style={styles.verifyButtonText}>FIND MATCHES</Text>}
         {!isFinding && <Feather name="search" size={18} color={COLORS.white} style={{marginLeft: 8}} />}
       </TouchableOpacity>
+
+      <View style={{ marginBottom: 16 }}>
+        <TouchableOpacity 
+          style={[styles.findMatchesButton, { backgroundColor: isTestMode ? '#DC2626' : '#F59E0B', marginBottom: 8, marginTop: 0 }]} 
+          onPress={() => setIsTestMode(!isTestMode)} 
+          disabled={isFinding}
+        >
+          <Text style={styles.verifyButtonText}>{isTestMode ? "DISABLE TEST MODE" : "ENABLE TEST MODE"}</Text>
+        </TouchableOpacity>
+
+        {isTestMode && (
+          <TouchableOpacity 
+            style={[styles.findMatchesButton, { backgroundColor: '#94A3B8', marginBottom: 8, marginTop: 0 }]} 
+            onPress={createTestMatch} 
+            disabled={isCreatingTest || isFinding}
+          >
+            {isCreatingTest ? <ActivityIndicator color={COLORS.white} /> : <Text style={styles.verifyButtonText}>CREATE TEST MATCH (A & B)</Text>}
+          </TouchableOpacity>
+        )}
+      </View>
 
       <View style={styles.requestsHeaderRow}>
         <Text style={styles.requestsHeaderText}>MATCH REQUESTS</Text>
@@ -464,10 +620,12 @@ const VerifiedSeatExchangeView = ({ pnr, requestId }: VerifiedViewProps) => {
         matches.map((match: any, i) => (
           <MatchRequestCard 
             key={match.id || i}
-            current={match.offered_seat || "SU"} 
-            offered={match.requested_berth || berth.match(/\(([^)]+)\)/)?.[1] || "LB"} 
-            from={match.from_pnr_part || "B2/45"}
+            current={match.berth_type || "SU"} 
+            offered={match.preference || "LB"} 
+            from={match.coach ? `${match.coach}/${match.seat_no}` : "B2/45"}
             onAccept={() => handleAcceptSwap(match.id)}
+            onIgnore={() => ignoreMatch(match.id)}
+            disabled={isAccepting}
           />
         ))
       ) : (
@@ -494,10 +652,12 @@ interface MatchCardProps {
   offered: string;
   from: string;
   onAccept: () => void;
+  onIgnore: () => void;
+  disabled?: boolean;
 }
 
-const MatchRequestCard = ({current, offered, from, onAccept}: MatchCardProps) => (
-  <Animated.View entering={FadeIn.delay(200)} style={styles.matchCard}>
+const MatchRequestCard = ({current, offered, from, onAccept, onIgnore, disabled}: MatchCardProps) => (
+  <Animated.View entering={FadeIn.delay(200)} style={[styles.matchCard, { opacity: disabled ? 0.6 : 1 }]}>
      <View style={[styles.infoLeftBorder, {backgroundColor: COLORS.primary, marginRight: 0}]} />
      <View style={styles.matchCardContent}>
         <View style={styles.matchTopRow}>
@@ -518,10 +678,10 @@ const MatchRequestCard = ({current, offered, from, onAccept}: MatchCardProps) =>
            </View>
         </View>
         <View style={styles.matchActionsRow}>
-           <TouchableOpacity style={styles.actionIgnoreBtn}>
+           <TouchableOpacity style={styles.actionIgnoreBtn} onPress={onIgnore} disabled={disabled}>
              <Text style={styles.actionIgnoreText}>IGNORE</Text>
            </TouchableOpacity>
-           <TouchableOpacity style={styles.actionAcceptBtn} onPress={onAccept}>
+           <TouchableOpacity style={styles.actionAcceptBtn} onPress={onAccept} disabled={disabled}>
              <Text style={styles.actionAcceptText}>ACCEPT SWAP</Text>
            </TouchableOpacity>
         </View>

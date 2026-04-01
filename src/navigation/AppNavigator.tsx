@@ -8,6 +8,8 @@ import SeatExchangeScreen from '../screens/SeatExchangeScreen';
 import ConnectingJourneyScreen from '../screens/ConnectingJourneyScreen';
 import TrainListScreen from '../screens/TrainListScreen';
 import LiveStatusScreen from '../screens/LiveStatusScreen';
+import ProfileScreen from '../screens/ProfileScreen';
+import AuthScreen from '../screens/AuthScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -21,6 +23,8 @@ export default function AppNavigator() {
       <Stack.Screen name="ConnectingJourney" component={ConnectingJourneyScreen} />
       <Stack.Screen name="TrainList" component={TrainListScreen} />
       <Stack.Screen name="LiveStatus" component={LiveStatusScreen} />
+      <Stack.Screen name="Profile" component={ProfileScreen} />
+      <Stack.Screen name="Auth" component={AuthScreen} />
     </Stack.Navigator>
   );
 }

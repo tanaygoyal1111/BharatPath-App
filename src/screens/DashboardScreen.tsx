@@ -9,6 +9,7 @@ import { usePnrStatus, getCachedJourney, clearActiveJourney, JourneyData } from 
 import masterMap from '../api/bharatpath_master_map.json';
 import { supabase } from '../lib/supabase';
 import AuthModal from '../components/Auth/AuthModal';
+import { BottomNav } from '../components/Navigation/BottomNav';
 
 const { width } = Dimensions.get('window');
 
@@ -199,7 +200,7 @@ export default function Dashboard() {
           )}
 
         {/* Unified Bottom Nav */}
-        <BottomNav isOffline={isOffline} />
+        <BottomNav isOffline={isOffline} activeTab="HOME" />
       </View>
 
       {/* Strict Auth Gatekeeper Modal */}
@@ -219,35 +220,6 @@ export default function Dashboard() {
   );
 }
 
-const BottomNav = ({ isOffline }: { isOffline: boolean }) => {
-  const navigation = useNavigation<any>();
-  return (
-    <View style={styles.bottomNav}>
-      <TouchableOpacity style={styles.navItemWrap}>
-        <View style={isOffline ? styles.navHomeActivePillOffline : styles.navHomeActivePillOnline}>
-          <MaterialIcons name="home" size={26} color={isOffline ? COLORS.white : COLORS.primary} />
-          {isOffline ? <Text style={styles.navTextActivePillOffline}>HOME</Text> : null}
-        </View>
-        {!isOffline ? <Text style={styles.navTextActiveOnline}>HOME</Text> : null}
-      </TouchableOpacity>
-      
-      <TouchableOpacity style={styles.navItemWrap} onPress={() => navigation.navigate('LiveStatus')}>
-        <MaterialIcons name="wifi-tethering" size={24} color={COLORS.textLightGray} />
-        <Text style={styles.navText}>LIVE STATUS</Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity style={styles.navItemWrap} onPress={() => navigation.navigate('Help', { isOffline })}>
-        <MaterialIcons name="sos" size={24} color={COLORS.textLightGray} />
-        <Text style={styles.navText}>SOS HELP</Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity style={styles.navItemWrap}>
-        <MaterialIcons name="person-outline" size={26} color={COLORS.textLightGray} />
-        <Text style={styles.navText}>PROFILE</Text>
-      </TouchableOpacity>
-    </View>
-  );
-};
 
 const HighlightText = ({ text, highlight }: { text: string; highlight: string }) => {
   if (!highlight.trim()) return <Text>{text}</Text>;
@@ -371,7 +343,7 @@ function SearchHubCard({ activeJourney, onJourneyUpdate }: { activeJourney: Jour
               </View>
               {fromSearch.showSuggestions && fromSearch.suggestions.length > 0 && (
                 <View style={styles.suggestionBox}>
-                  {fromSearch.suggestions.map(s => (
+                  {fromSearch.suggestions.map((s: any) => (
                     <TouchableOpacity key={s.code} onPress={() => fromSearch.selectStation(s.code)} style={styles.suggestionItem}>
                       <Text style={styles.suggestionText}>
                         <HighlightText text={s.code} highlight={fromSearch.query} /> - <Text style={{fontWeight: '400', color: COLORS.textGray}}><HighlightText text={s.name} highlight={fromSearch.query} /></Text>
@@ -401,7 +373,7 @@ function SearchHubCard({ activeJourney, onJourneyUpdate }: { activeJourney: Jour
               </View>
               {toSearch.showSuggestions && toSearch.suggestions.length > 0 && (
                 <View style={[styles.suggestionBox, { top: 55 }]}>
-                  {toSearch.suggestions.map(s => (
+                  {toSearch.suggestions.map((s: any) => (
                     <TouchableOpacity key={s.code} onPress={() => toSearch.selectStation(s.code)} style={styles.suggestionItem}>
                       <Text style={styles.suggestionText}>
                         <HighlightText text={s.code} highlight={toSearch.query} /> - <Text style={{fontWeight: '400', color: COLORS.textGray}}><HighlightText text={s.name} highlight={toSearch.query} /></Text>
@@ -833,25 +805,9 @@ const styles = StyleSheet.create({
   },
   syncedTextOnline: { color: COLORS.white, fontSize: 10, fontWeight: '800', letterSpacing: 1 },
 
-  bottomNav: {
-    flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center',
-    backgroundColor: COLORS.white, paddingTop: 12, paddingBottom: Dimensions.get('window').height > 800 ? 32 : 16,
-    borderTopWidth: 1, borderColor: COLORS.inputBg,
-  },
   transitionContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.background, paddingHorizontal: 40 },
   transitionTitle: { fontSize: 18, fontWeight: '900', color: COLORS.textDark, textAlign: 'center', letterSpacing: -0.5 },
   transitionSubtitle: { fontSize: 12, color: COLORS.textGray, textAlign: 'center', marginTop: 12, lineHeight: 18, fontWeight: '600' },
-  navItemWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', height: 60 },
-  navHomeActivePillOnline: {
-    width: 48, height: 32, backgroundColor: COLORS.bgP2P, borderRadius: 16, justifyContent: 'center', alignItems: 'center',
-  },
-  navHomeActivePillOffline: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', height: 40, paddingHorizontal: 20,
-    backgroundColor: COLORS.primary, borderRadius: 20,
-  },
-  navText: { fontSize: 10, fontWeight: '700', color: COLORS.textLightGray, marginTop: 6 },
-  navTextActiveOnline: { fontSize: 10, fontWeight: '900', color: COLORS.primary, marginTop: 4 },
-  navTextActivePillOffline: { fontSize: 12, fontWeight: '800', color: COLORS.white, marginLeft: 8, letterSpacing: 0.5 },
 
   // --- ONLINE DASHBOARD STYLES ---
   card: { backgroundColor: COLORS.white, borderRadius: 24, padding: 16, elevation: 3 },
