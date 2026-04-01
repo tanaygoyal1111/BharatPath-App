@@ -8,11 +8,13 @@ import {
   Dimensions,
   StatusBar,
   Platform,
+  ActivityIndicator,
   Animated as RNAnimated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
+import { useQuery } from '@tanstack/react-query';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -29,6 +31,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import Svg, { Circle, Line, Path, Defs, RadialGradient, Stop, Rect, Text as SvgText } from 'react-native-svg';
 import { BottomNav } from '../components/Navigation/BottomNav';
+import { fetchJourneyData, JourneyAPIData } from '../services/journeyService';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -55,7 +58,9 @@ const COLORS = {
   // Misc
   divider: '#E2E8F0',
   success: '#10B981',
+  errorRed: '#EF4444',
   shadow: 'rgba(26, 35, 126, 0.12)',
+  shimmer: '#E8EDF2',
 };
 
 // ─── TYPES ────────────────────────────────────────────────────
@@ -74,36 +79,55 @@ interface Amenity {
   count?: number;
 }
 
-interface JourneyProps {
-  isOnline?: boolean;
-  distanceToDestination?: number;
-  trainData?: TrainData;
-  amenities?: Amenity[];
-  destinationName?: string;
-}
-
-// ─── MOCK DATA ────────────────────────────────────────────────
-const MOCK_TRAIN: TrainData = {
-  trainNumber: '12128',
-  trainName: 'Intercity Exp',
-  currentSpeed: 84,
-  arrivalTime: '14:45',
-  arrivalTimezone: 'IST',
-};
-
-const MOCK_AMENITIES: Amenity[] = [
+// ─── DEFAULT AMENITIES (always shown) ────────────────────────
+const DEFAULT_AMENITIES: Amenity[] = [
   { id: '1', label: 'Hospitals', icon: 'local-hospital', count: 3 },
   { id: '2', label: 'Hotels', icon: 'hotel', count: 5 },
   { id: '3', label: 'Station Exits', icon: 'exit-to-app', count: 4 },
 ];
 
-// ─── ANIMATED MAP CARD ───────────────────────────────────────
-const AnimatedSvgCircle = (() => {
-  // We'll use RNAnimated for SVG since reanimated native driver doesn't work with SVG props
-  return RNAnimated.createAnimatedComponent(Circle);
-})();
+// ─── SHIMMER PLACEHOLDER ─────────────────────────────────────
+const ShimmerBlock = memo(({ width: w, height: h, style }: { width: number | string; height: number; style?: any }) => {
+  const shimmerAnim = useRef(new RNAnimated.Value(0)).current;
 
-const MapCard = memo(({ destinationName = 'PUNE JCT', distanceKm = 9.2 }: { destinationName?: string; distanceKm?: number }) => {
+  useEffect(() => {
+    RNAnimated.loop(
+      RNAnimated.sequence([
+        RNAnimated.timing(shimmerAnim, { toValue: 1, duration: 1200, useNativeDriver: true }),
+        RNAnimated.timing(shimmerAnim, { toValue: 0, duration: 1200, useNativeDriver: true }),
+      ])
+    ).start();
+  }, []);
+
+  return (
+    <RNAnimated.View
+      style={[
+        {
+          width: w,
+          height: h,
+          backgroundColor: COLORS.shimmer,
+          borderRadius: 8,
+          opacity: shimmerAnim.interpolate({ inputRange: [0, 1], outputRange: [0.4, 0.8] }),
+        },
+        style,
+      ]}
+    />
+  );
+});
+
+// ─── HELPER: format arrival time ─────────────────────────────
+const formatArrivalTime = (isoString?: string): string => {
+  if (!isoString) return '--:--';
+  try {
+    const d = new Date(isoString);
+    return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+  } catch {
+    return '--:--';
+  }
+};
+
+// ─── ANIMATED MAP CARD ───────────────────────────────────────
+const MapCard = memo(({ destinationName, distanceKm, isLoading }: { destinationName: string; distanceKm: number; isLoading?: boolean }) => {
   // Pulsing marker
   const pulse1 = useRef(new RNAnimated.Value(0)).current;
   const pulse2 = useRef(new RNAnimated.Value(0)).current;
@@ -250,7 +274,7 @@ const MapCard = memo(({ destinationName = 'PUNE JCT', distanceKm = 9.2 }: { dest
 
         {/* Destination label */}
         <View style={[styles.destinationLabel, { left: centerX - 40, top: centerY + 20 }]}>
-          <Text style={styles.destinationLabelText}>{destinationName}</Text>
+          <Text style={styles.destinationLabelText}>{destinationName || 'DESTINATION'}</Text>
         </View>
 
         {/* Animated train dot */}
@@ -279,7 +303,11 @@ const MapCard = memo(({ destinationName = 'PUNE JCT', distanceKm = 9.2 }: { dest
 
       {/* Distance Info */}
       <Animated.View style={[styles.distanceContainer, distanceAnimStyle]}>
-        <Text style={styles.distanceNumber}>{distanceKm}</Text>
+        {isLoading ? (
+          <ShimmerBlock width={120} height={48} style={{ marginRight: 8 }} />
+        ) : (
+          <Text style={styles.distanceNumber}>{distanceKm ?? '--'}</Text>
+        )}
         <View style={styles.distanceMeta}>
           <Text style={styles.distanceUnit}>KILOMETERS</Text>
           <Text style={styles.distanceSub}>TO DESTINATION</Text>
@@ -361,7 +389,7 @@ const ProximityAlertCard = memo(() => {
 });
 
 // ─── TRAIN STATUS CARD ───────────────────────────────────────
-const TrainStatusCard = memo(({ train }: { train: TrainData }) => {
+const TrainStatusCard = memo(({ train, isLoading }: { train: TrainData; isLoading?: boolean }) => {
   const cardScale = useSharedValue(0.92);
   const cardOpacity = useSharedValue(0);
 
@@ -382,8 +410,14 @@ const TrainStatusCard = memo(({ train }: { train: TrainData }) => {
         <View style={styles.trainArrivalSection}>
           <Text style={styles.trainArrivalLabel}>ARRIVAL ESTIMATE</Text>
           <View style={styles.trainArrivalTimeRow}>
-            <Text style={styles.trainArrivalTime}>{train.arrivalTime}</Text>
-            <Text style={styles.trainArrivalTz}>{train.arrivalTimezone}</Text>
+            {isLoading ? (
+              <ShimmerBlock width={120} height={42} style={{ borderRadius: 12 }} />
+            ) : (
+              <>
+                <Text style={styles.trainArrivalTime}>{train?.arrivalTime || '--:--'}</Text>
+                <Text style={styles.trainArrivalTz}>{train?.arrivalTimezone || 'IST'}</Text>
+              </>
+            )}
           </View>
         </View>
 
@@ -394,14 +428,24 @@ const TrainStatusCard = memo(({ train }: { train: TrainData }) => {
         <View style={styles.trainInfoRow}>
           <View style={styles.trainInfoBlock}>
             <Text style={styles.trainInfoLabel}>TRAIN NUMBER</Text>
-            <Text style={styles.trainInfoValue}>{train.trainNumber} • {train.trainName}</Text>
+            {isLoading ? (
+              <ShimmerBlock width={180} height={18} style={{ marginTop: 4, borderRadius: 6 }} />
+            ) : (
+              <Text style={styles.trainInfoValue}>
+                {train?.trainNumber || 'N/A'} • {train?.trainName || 'Data unavailable'}
+              </Text>
+            )}
           </View>
         </View>
 
         {/* Speed */}
         <View style={styles.trainSpeedRow}>
           <Text style={styles.trainSpeedLabel}>CURRENT SPEED</Text>
-          <Text style={styles.trainSpeedValue}>{train.currentSpeed} km/h</Text>
+          {isLoading ? (
+            <ShimmerBlock width={100} height={24} style={{ marginTop: 4, borderRadius: 8 }} />
+          ) : (
+            <Text style={styles.trainSpeedValue}>{train?.currentSpeed ?? '--'} km/h</Text>
+          )}
         </View>
 
         {/* Full Schedule Button */}
@@ -436,14 +480,49 @@ const Header = memo(({ isOnline }: { isOnline: boolean }) => {
   );
 });
 
+// ─── ERROR STATE ─────────────────────────────────────────────
+const ErrorState = memo(({ message, onRetry }: { message: string; onRetry: () => void }) => (
+  <View style={styles.errorContainer}>
+    <MaterialCommunityIcons name="alert-circle-outline" size={48} color={COLORS.errorRed} />
+    <Text style={styles.errorTitle}>Something went wrong</Text>
+    <Text style={styles.errorMessage}>{message}</Text>
+    <TouchableOpacity style={styles.retryBtn} onPress={onRetry} activeOpacity={0.8}>
+      <Feather name="refresh-cw" size={16} color={COLORS.white} />
+      <Text style={styles.retryBtnText}>RETRY</Text>
+    </TouchableOpacity>
+  </View>
+));
+
 // ─── MAIN SCREEN ─────────────────────────────────────────────
-export default function JourneyScreen({
-  isOnline = false,
-  distanceToDestination = 9.2,
-  trainData = MOCK_TRAIN,
-  amenities = MOCK_AMENITIES,
-  destinationName = 'PUNE JCT',
-}: JourneyProps) {
+export default function JourneyScreen() {
+  const route = useRoute<any>();
+  const pnr: string = route.params?.pnr || '';
+
+  // ── TanStack Query ────────────────────────────────────────
+  const { data, isLoading, error, refetch } = useQuery<JourneyAPIData>({
+    queryKey: ['journey', pnr],
+    queryFn: () => fetchJourneyData(pnr),
+    enabled: !!pnr,
+    staleTime: 60_000,      // 60s — live data frequency
+    refetchInterval: 60_000, // Auto-refresh every 60s
+    retry: 2,
+  });
+
+  // ── Derived data (with fallbacks) ─────────────────────────
+  const isOnline = !error && !data?.fallback;
+  const destinationName = data?.destination?.name || data?.destination?.code || 'DESTINATION';
+  const distanceKm = data?.distanceToDestination ?? 0;
+
+  const trainData: TrainData = useMemo(() => ({
+    trainNumber: data?.trainNumber || 'N/A',
+    trainName: data?.trainName || 'Data unavailable',
+    currentSpeed: data?.currentSpeed ?? 0,
+    arrivalTime: formatArrivalTime(data?.arrivalTime),
+    arrivalTimezone: 'IST',
+  }), [data?.trainNumber, data?.trainName, data?.currentSpeed, data?.arrivalTime]);
+
+  const amenities = DEFAULT_AMENITIES; // Static for now, can be wired to /api/v1/amenities later
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <StatusBar barStyle="light-content" backgroundColor={COLORS.primary} />
@@ -455,10 +534,27 @@ export default function JourneyScreen({
         showsVerticalScrollIndicator={false}
         bounces={false}
       >
-        <MapCard destinationName={destinationName} distanceKm={distanceToDestination} />
-        <AmenitiesList amenities={amenities} />
-        <ProximityAlertCard />
-        <TrainStatusCard train={trainData} />
+        {/* Error state: show retry but keep layout */}
+        {error && !data ? (
+          <ErrorState
+            message={(error as any)?.message || 'Unable to fetch journey data. Please check your connection.'}
+            onRetry={() => refetch()}
+          />
+        ) : null}
+
+        {/* Map + Distance — always render structure, shimmer when loading */}
+        {(!error || data) && (
+          <>
+            <MapCard
+              destinationName={destinationName}
+              distanceKm={distanceKm}
+              isLoading={isLoading}
+            />
+            <AmenitiesList amenities={amenities} />
+            <ProximityAlertCard />
+            <TrainStatusCard train={trainData} isLoading={isLoading} />
+          </>
+        )}
         <View style={styles.scrollSpacer} />
       </ScrollView>
 
@@ -823,6 +919,44 @@ const styles = StyleSheet.create({
   },
   scheduleBtnText: {
     fontSize: 13,
+    fontWeight: '900',
+    color: COLORS.white,
+    letterSpacing: 1,
+  },
+
+  // Error State
+  errorContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 60,
+    paddingHorizontal: 32,
+  },
+  errorTitle: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: COLORS.darkCharcoal,
+    marginTop: 16,
+  },
+  errorMessage: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: COLORS.mutedSlate,
+    textAlign: 'center',
+    marginTop: 8,
+    lineHeight: 21,
+  },
+  retryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: 28,
+    paddingVertical: 14,
+    borderRadius: 14,
+    marginTop: 24,
+  },
+  retryBtnText: {
+    fontSize: 14,
     fontWeight: '900',
     color: COLORS.white,
     letterSpacing: 1,
