@@ -1,11 +1,12 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Dimensions, StatusBar, Platform, Modal, ActivityIndicator, TextInput, Alert } from 'react-native';
+import React, { useState, useMemo, useEffect, useRef, useCallback, memo } from 'react';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Dimensions, StatusBar, Platform, Modal, ActivityIndicator, TextInput, Alert, Animated as RNAnimated } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import OfflineDashboard from './OfflineDashboard';
 import { useStationSearch } from '../hooks/useStationSearch';
 import { usePnrStatus, getCachedJourney, clearActiveJourney, JourneyData } from '../hooks/usePnrStatus';
+import { useJourneyNavigation } from '../hooks/useJourneyNavigation';
 import masterMap from '../api/bharatpath_master_map.json';
 import { supabase } from '../lib/supabase';
 import AuthModal from '../components/Auth/AuthModal';
@@ -505,14 +506,32 @@ function SearchHubCard({ activeJourney, onJourneyUpdate }: { activeJourney: Jour
   );
 }
 
-const OnlineActiveJourneyCard = ({ data, onClear, onRefresh, status }: { data: JourneyData, onClear: () => void, onRefresh: (j: JourneyData) => void, status: string }) => {
-  const navigation = useNavigation<any>();
+const OnlineActiveJourneyCard = memo(({ data, onClear, onRefresh, status }: { data: JourneyData, onClear: () => void, onRefresh: (j: JourneyData) => void, status: string }) => {
   const pnrMutation = usePnrStatus(
     (updated) => onRefresh(updated),
     (err) => Alert.alert('Refresh Failed', err.message || 'Check connection')
   );
+  const { navigateToJourney, getButtonConfig } = useJourneyNavigation();
 
   const isUpcoming = status === 'UPCOMING';
+  const isActive = status === 'ACTIVE';
+  const buttonConfig = getButtonConfig(status as any);
+
+  // Pulse animation for ACTIVE CTA
+  const pulseAnim = useRef(new RNAnimated.Value(1)).current;
+  useEffect(() => {
+    if (isActive) {
+      RNAnimated.loop(
+        RNAnimated.sequence([
+          RNAnimated.timing(pulseAnim, { toValue: 1.04, duration: 1000, useNativeDriver: true }),
+          RNAnimated.timing(pulseAnim, { toValue: 1, duration: 1000, useNativeDriver: true }),
+        ])
+      ).start();
+    } else {
+      pulseAnim.stopAnimation();
+      pulseAnim.setValue(1);
+    }
+  }, [isActive]);
 
   const getDaysToGo = (departs: string) => {
     try {
@@ -562,8 +581,26 @@ const OnlineActiveJourneyCard = ({ data, onClear, onRefresh, status }: { data: J
     return clean || 'TBA';
   };
 
+  const handleTrackJourney = useCallback(() => {
+    navigateToJourney(data);
+  }, [data, navigateToJourney]);
+
   return (
     <View style={styles.sectionContainer}>
+      {/* Active Travel Banner */}
+      {isActive && (
+        <TouchableOpacity style={styles.travelBanner} onPress={handleTrackJourney} activeOpacity={0.85}>
+          <View style={styles.travelBannerLeft}>
+            <MaterialCommunityIcons name="train" size={18} color={COLORS.white} />
+            <Text style={styles.travelBannerText}>You're currently travelling</Text>
+          </View>
+          <View style={styles.travelBannerBtn}>
+            <Text style={styles.travelBannerBtnText}>Track Now</Text>
+            <Feather name="arrow-right" size={14} color={COLORS.primary} />
+          </View>
+        </TouchableOpacity>
+      )}
+
       <View style={styles.sectionHeader}>
         <Text style={styles.sectionTitle}>{isUpcoming ? 'UPCOMING JOURNEY' : 'ACTIVE JOURNEY'}</Text>
         <TouchableOpacity onPress={onClear}>
@@ -572,147 +609,147 @@ const OnlineActiveJourneyCard = ({ data, onClear, onRefresh, status }: { data: J
       </View>
 
       {isUpcoming ? (
-        <View style={[styles.cardNoPadding, { borderWidth: 1, borderColor: COLORS.softBlue }]}>
-          <View style={styles.journeyContent}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <MaterialCommunityIcons name="clock-outline" size={24} color={COLORS.warning} />
-                <Text style={{ marginLeft: 10, fontSize: 24, fontWeight: '900', color: COLORS.darkCharcoal }}>{daysToGo} Days to Go</Text>
+        <TouchableOpacity activeOpacity={0.92} onPress={handleTrackJourney}>
+          <View style={[styles.cardNoPadding, { borderWidth: 1, borderColor: COLORS.softBlue }]}>
+            <View style={styles.journeyContent}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <MaterialCommunityIcons name="clock-outline" size={24} color={COLORS.warning} />
+                  <Text style={{ marginLeft: 10, fontSize: 24, fontWeight: '900', color: COLORS.darkCharcoal }}>{daysToGo} Days to Go</Text>
+                </View>
+                <View style={[styles.tagIndigo, { backgroundColor: COLORS.primary }]}>
+                  <Text style={styles.tagIndigoText}>UPCOMING</Text>
+                </View>
               </View>
-              <View style={[styles.tagIndigo, { backgroundColor: COLORS.primary }]}>
-                <Text style={styles.tagIndigoText}>UPCOMING</Text>
-              </View>
-            </View>
 
-            <Text style={[styles.infoLabel, { color: COLORS.slateGray }]}>TRAIN {data?.trainNo}</Text>
-            <Text style={[styles.journeyTrainName, { marginTop: 4, letterSpacing: -0.5, fontSize: 20, color: COLORS.primary }]}>{data?.trainName?.toUpperCase()}</Text>
+              <Text style={[styles.infoLabel, { color: COLORS.slateGray }]}>TRAIN {data?.trainNo}</Text>
+              <Text style={[styles.journeyTrainName, { marginTop: 4, letterSpacing: -0.5, fontSize: 20, color: COLORS.primary }]}>{data?.trainName?.toUpperCase()}</Text>
 
-            <View style={styles.stationMapping}>
-              <View style={styles.stationBlockLeft}>
-                <Text style={[styles.stationHuge, { color: COLORS.primary }]} adjustsFontSizeToFit numberOfLines={1}>{data?.sourceCode}</Text>
-                <Text style={[styles.stationCity, { color: COLORS.slateGray }]}>{data?.sourceCity?.toUpperCase()}</Text>
-              </View>
-              <View style={styles.stationConnector}>
-                <View style={[styles.connectorLine, { backgroundColor: COLORS.primary, opacity: 0.2 }]} />
-                <View style={[styles.connectorIconWrap, { borderColor: COLORS.primary, opacity: 0.8 }]}>
-                  <MaterialCommunityIcons name="train" size={18} color={COLORS.primary} />
+              <View style={styles.stationMapping}>
+                <View style={styles.stationBlockLeft}>
+                  <Text style={[styles.stationHuge, { color: COLORS.primary }]} adjustsFontSizeToFit numberOfLines={1}>{data?.sourceCode}</Text>
+                  <Text style={[styles.stationCity, { color: COLORS.slateGray }]}>{data?.sourceCity?.toUpperCase()}</Text>
+                </View>
+                <View style={styles.stationConnector}>
+                  <View style={[styles.connectorLine, { backgroundColor: COLORS.primary, opacity: 0.2 }]} />
+                  <View style={[styles.connectorIconWrap, { borderColor: COLORS.primary, opacity: 0.8 }]}>
+                    <MaterialCommunityIcons name="train" size={18} color={COLORS.primary} />
+                  </View>
+                </View>
+                <View style={styles.stationBlockRight}>
+                  <Text style={[styles.stationHuge, { color: COLORS.primary }]} adjustsFontSizeToFit numberOfLines={1}>{data?.destCode}</Text>
+                  <Text style={[styles.stationCity, { color: COLORS.slateGray }]}>{data?.destCity?.toUpperCase()}</Text>
                 </View>
               </View>
-              <View style={styles.stationBlockRight}>
-                <Text style={[styles.stationHuge, { color: COLORS.primary }]} adjustsFontSizeToFit numberOfLines={1}>{data?.destCode}</Text>
-                <Text style={[styles.stationCity, { color: COLORS.slateGray }]}>{data?.destCity?.toUpperCase()}</Text>
-              </View>
-            </View>
 
-            <View style={{ height: 1, backgroundColor: COLORS.divider, marginVertical: 32, opacity: 0.5 }} />
+              <View style={{ height: 1, backgroundColor: COLORS.divider, marginVertical: 32, opacity: 0.5 }} />
 
-            <View style={styles.upcomingGrid}>
-              <View style={styles.gridRow}>
-                <View style={styles.gridItem}>
-                  <Text style={[styles.infoLabel, { color: COLORS.slateGray }]}>PNR NUMBER</Text>
-                  <Text style={[styles.infoValue, { color: COLORS.primary, fontSize: 18 }]}>{data?.pnr}</Text>
+              <View style={styles.upcomingGrid}>
+                <View style={styles.gridRow}>
+                  <View style={styles.gridItem}>
+                    <Text style={[styles.infoLabel, { color: COLORS.slateGray }]}>PNR NUMBER</Text>
+                    <Text style={[styles.infoValue, { color: COLORS.primary, fontSize: 18 }]}>{data?.pnr}</Text>
+                  </View>
+                  <View style={styles.gridItem}>
+                    <Text style={[styles.infoLabel, { color: COLORS.slateGray }]}>DEPARTS</Text>
+                    <Text style={[styles.infoValue, { color: COLORS.primary, fontSize: 18 }]}>{formatUpcomingDate(data?.departs)}</Text>
+                  </View>
                 </View>
-                <View style={styles.gridItem}>
-                  <Text style={[styles.infoLabel, { color: COLORS.slateGray }]}>DEPARTS</Text>
-                  <Text style={[styles.infoValue, { color: COLORS.primary, fontSize: 18 }]}>{formatUpcomingDate(data?.departs)}</Text>
+                <View style={[styles.gridRow, { marginTop: 24 }]}>
+                  <View style={styles.gridItem}>
+                    <Text style={[styles.infoLabel, { color: COLORS.slateGray }]}>PLATFORM</Text>
+                    <Text style={[styles.infoValue, { color: COLORS.warning, fontSize: 18 }]}>{formatPlatform(data?.platform)}</Text>
+                  </View>
+                  <View style={styles.gridItem}>
+                    <Text style={[styles.infoLabel, { color: COLORS.slateGray }]}>COACH / SEAT</Text>
+                    <Text style={[styles.infoValue, { color: COLORS.primary, fontSize: 18 }]}>{data?.coach} / {data?.seat}</Text>
+                  </View>
                 </View>
               </View>
-              <View style={[styles.gridRow, { marginTop: 24 }]}>
-                <View style={styles.gridItem}>
-                  <Text style={[styles.infoLabel, { color: COLORS.slateGray }]}>PLATFORM</Text>
-                  <Text style={[styles.infoValue, { color: COLORS.warning, fontSize: 18 }]}>{formatPlatform(data?.platform)}</Text>
-                </View>
-                <View style={styles.gridItem}>
-                  <Text style={[styles.infoLabel, { color: COLORS.slateGray }]}>COACH / SEAT</Text>
-                  <Text style={[styles.infoValue, { color: COLORS.primary, fontSize: 18 }]}>{data?.coach} / {data?.seat}</Text>
-                </View>
-              </View>
+
+              {/* VIEW JOURNEY CTA */}
+              <TouchableOpacity style={styles.trackJourneyBtn} onPress={handleTrackJourney} activeOpacity={0.85}>
+                <Feather name={buttonConfig.icon} size={16} color={COLORS.white} />
+                <Text style={styles.trackJourneyBtnText}>{buttonConfig.label}</Text>
+              </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </TouchableOpacity>
       ) : (
-        <View style={styles.cardNoPadding}>
-          <View style={styles.journeyContent}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-              <View>
-                <Text style={styles.infoLabel}>TRAIN {data?.trainNo}</Text>
-                <Text style={[styles.journeyTrainName, { letterSpacing: -0.5, fontSize: 18 }]}>{data?.trainName?.toUpperCase()}</Text>
-              </View>
-              <View style={styles.tagOrange}>
-                <Text style={styles.tagOrangeText}>BOARDED</Text>
-              </View>
-            </View>
-            <Text style={styles.journeySubText}>{data?.subText || 'FASTEST TRANSIT'}</Text>
-
-            <View style={styles.stationMapping}>
-              <View style={styles.stationBlockLeft}>
-                <Text style={styles.stationHuge} adjustsFontSizeToFit numberOfLines={1}>{data?.sourceCode}</Text>
-                <Text style={styles.stationCity}>{data?.sourceCity?.toUpperCase()}</Text>
-              </View>
-              <View style={styles.stationConnector}>
-                <View style={styles.connectorLine} />
-                <View style={styles.connectorIconWrap}>
-                  <MaterialCommunityIcons name="train" size={18} color={COLORS.textGray} />
+        <TouchableOpacity activeOpacity={0.92} onPress={handleTrackJourney}>
+          <View style={styles.cardNoPadding}>
+            <View style={styles.journeyContent}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <View>
+                  <Text style={styles.infoLabel}>TRAIN {data?.trainNo}</Text>
+                  <Text style={[styles.journeyTrainName, { letterSpacing: -0.5, fontSize: 18 }]}>{data?.trainName?.toUpperCase()}</Text>
+                </View>
+                <View style={styles.tagOrange}>
+                  <Text style={styles.tagOrangeText}>BOARDED</Text>
                 </View>
               </View>
-              <View style={styles.stationBlockRight}>
-                <Text style={styles.stationHuge} adjustsFontSizeToFit numberOfLines={1}>{data?.destCode}</Text>
-                <Text style={styles.stationCity}>{data?.destCity?.toUpperCase()}</Text>
-              </View>
-            </View>
+              <Text style={styles.journeySubText}>{data?.subText || 'FASTEST TRANSIT'}</Text>
 
-            <View style={styles.journeyInfoRow}>
-              <View style={styles.journeyInfoItem}>
-                <Text style={styles.infoLabel}>DEPARTS</Text>
-                <Text style={styles.infoValue}>{formatTime(data?.departs)}</Text>
-              </View>
-              <View style={[styles.journeyInfoItem, {alignItems: 'center'}]}>
-                <Text style={styles.infoLabel}>PLATFORM</Text>
-                <Text style={styles.infoValueBlue}>{formatPlatform(data?.platform)}</Text>
-              </View>
-              <View style={[styles.journeyInfoItem, {alignItems: 'flex-end'}]}>
-                <Text style={styles.infoLabel}>COACH/SEAT</Text>
-                <Text style={styles.infoValue}>{data?.coach} / {data?.seat}</Text>
-              </View>
-            </View>
-
-            <View style={styles.progressSection}>
-              <View style={styles.progressHeader}>
-                <View style={styles.progressRow}>
-                  <Feather name="map-pin" size={14} color={COLORS.textGray} />
-                  <Text style={styles.progressText}>{data?.currentLocation || 'Arriving at MGS Junction'}</Text>
+              <View style={styles.stationMapping}>
+                <View style={styles.stationBlockLeft}>
+                  <Text style={styles.stationHuge} adjustsFontSizeToFit numberOfLines={1}>{data?.sourceCode}</Text>
+                  <Text style={styles.stationCity}>{data?.sourceCity?.toUpperCase()}</Text>
                 </View>
-                <Text style={styles.etaText}>ETA {data?.eta || '20:45'}</Text>
+                <View style={styles.stationConnector}>
+                  <View style={styles.connectorLine} />
+                  <View style={styles.connectorIconWrap}>
+                    <MaterialCommunityIcons name="train" size={18} color={COLORS.textGray} />
+                  </View>
+                </View>
+                <View style={styles.stationBlockRight}>
+                  <Text style={styles.stationHuge} adjustsFontSizeToFit numberOfLines={1}>{data?.destCode}</Text>
+                  <Text style={styles.stationCity}>{data?.destCity?.toUpperCase()}</Text>
+                </View>
               </View>
-              <View style={styles.progressBarBg}>
-                <View style={[styles.progressBarFill, {width: `${data?.progressPct || 65}%`}]} />
-                <View style={[styles.progressDot, {left: `${data?.progressPct || 65}%`}]} />
+
+              <View style={styles.journeyInfoRow}>
+                <View style={styles.journeyInfoItem}>
+                  <Text style={styles.infoLabel}>DEPARTS</Text>
+                  <Text style={styles.infoValue}>{formatTime(data?.departs)}</Text>
+                </View>
+                <View style={[styles.journeyInfoItem, {alignItems: 'center'}]}>
+                  <Text style={styles.infoLabel}>PLATFORM</Text>
+                  <Text style={styles.infoValueBlue}>{formatPlatform(data?.platform)}</Text>
+                </View>
+                <View style={[styles.journeyInfoItem, {alignItems: 'flex-end'}]}>
+                  <Text style={styles.infoLabel}>COACH/SEAT</Text>
+                  <Text style={styles.infoValue}>{data?.coach} / {data?.seat}</Text>
+                </View>
               </View>
+
+              <View style={styles.progressSection}>
+                <View style={styles.progressHeader}>
+                  <View style={styles.progressRow}>
+                    <Feather name="map-pin" size={14} color={COLORS.textGray} />
+                    <Text style={styles.progressText}>{data?.currentLocation || 'Arriving at MGS Junction'}</Text>
+                  </View>
+                  <Text style={styles.etaText}>ETA {data?.eta || '20:45'}</Text>
+                </View>
+                <View style={styles.progressBarBg}>
+                  <View style={[styles.progressBarFill, {width: `${data?.progressPct || 65}%`}]} />
+                  <View style={[styles.progressDot, {left: `${data?.progressPct || 65}%`}]} />
+                </View>
+              </View>
+
+              {/* TRACK LIVE CTA with Pulse */}
+              <RNAnimated.View style={{ transform: [{ scale: pulseAnim }], marginTop: 24 }}>
+                <TouchableOpacity style={styles.trackLiveBtn} onPress={handleTrackJourney} activeOpacity={0.85}>
+                  <Feather name={buttonConfig.icon} size={16} color={COLORS.white} />
+                  <Text style={styles.trackLiveBtnText}>{buttonConfig.label}</Text>
+                </TouchableOpacity>
+              </RNAnimated.View>
             </View>
           </View>
-          <View style={styles.journeyFooter}>
-            <TouchableOpacity 
-              style={{ flexDirection: 'row', alignItems: 'center' }} 
-              onPress={() => pnrMutation.mutate(data.pnr)}
-              disabled={pnrMutation.isPending}
-            >
-              {pnrMutation.isPending ? (
-                <ActivityIndicator size="small" color={COLORS.white} />
-              ) : (
-                <>
-                  <Text style={styles.journeyFooterText}>{data?.trainName?.toUpperCase()} EXP</Text>
-                </>
-              )}
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.liveMapBtn} onPress={() => navigation.navigate('LiveStatus')}>
-              <Text style={styles.liveMapText}>LIVE MAP</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+        </TouchableOpacity>
       )}
     </View>
   );
-};
+});
 
 const OnlineUtilitiesSection = ({ onExchangePress, onConnectingPress }: { onExchangePress: () => void, onConnectingPress: () => void }) => (
   <View style={styles.sectionContainer}>
@@ -876,10 +913,18 @@ const styles = StyleSheet.create({
   progressBarBg: { height: 10, backgroundColor: COLORS.inputBg, borderRadius: 5, position: 'relative' },
   progressBarFill: { height: '100%', backgroundColor: COLORS.primary, borderRadius: 5 },
   progressDot: { position: 'absolute', top: -3, width: 16, height: 16, backgroundColor: COLORS.white, borderWidth: 3, borderColor: COLORS.primary, borderRadius: 8, marginLeft: -8 },
-  journeyFooter: { backgroundColor: COLORS.primary, paddingHorizontal: 24, paddingVertical: 18, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  journeyFooterText: { color: COLORS.white, fontWeight: '800', fontSize: 14, letterSpacing: 0.5 },
-  liveMapBtn: { backgroundColor: COLORS.primary, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 12 },
-  liveMapText: { color: COLORS.white, fontSize: 11, fontWeight: '900' },
+  // Travel Banner (Active state)
+  travelBanner: { backgroundColor: COLORS.primary, borderRadius: 16, paddingHorizontal: 18, paddingVertical: 14, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  travelBannerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  travelBannerText: { color: COLORS.white, fontSize: 13, fontWeight: '700' },
+  travelBannerBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: COLORS.white, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 },
+  travelBannerBtnText: { color: COLORS.primary, fontSize: 12, fontWeight: '900' },
+  // Track Journey CTA (Upcoming)
+  trackJourneyBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: COLORS.primary, paddingVertical: 16, borderRadius: 14, marginTop: 28 },
+  trackJourneyBtnText: { color: COLORS.white, fontSize: 14, fontWeight: '900', letterSpacing: 1 },
+  // Track Live CTA (Active - with pulse)
+  trackLiveBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: COLORS.primary, paddingVertical: 16, borderRadius: 14 },
+  trackLiveBtnText: { color: COLORS.white, fontSize: 14, fontWeight: '900', letterSpacing: 1 },
   utilitiesGrid: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16 },
   utilitySquare: { width: '48%', backgroundColor: COLORS.white, borderRadius: 24, padding: 20 },
   utilityTextWrap: { marginTop: 20 },
