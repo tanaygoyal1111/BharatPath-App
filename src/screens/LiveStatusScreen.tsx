@@ -1,23 +1,33 @@
-import React, { useRef, useState, useCallback, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   Dimensions,
-  FlatList,
   TouchableOpacity,
   SafeAreaView,
   StatusBar,
   Platform,
-  Animated as RNAnimated
+  ScrollView,
+  ActivityIndicator,
 } from 'react-native';
-import Animated, { useSharedValue, useAnimatedStyle, withTiming, withSpring, Easing } from 'react-native-reanimated';
-import { MaterialIcons, MaterialCommunityIcons, Feather } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { MaterialCommunityIcons, Feather } from '@expo/vector-icons';
+import { useNavigation, useRoute } from '@react-navigation/native';
+import * as Location from 'expo-location';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Notifications from 'expo-notifications';
+import * as Haptics from 'expo-haptics';
+import { useQuery } from '@tanstack/react-query';
+import { fetchJourneyData, JourneyAPIData, JourneyStation } from '../services/journeyService';
+
+// --- TYPES & CONSTANTS ---
+type JourneyState = 'LOADING' | 'UPCOMING' | 'ACTIVE' | 'NOT_TRAVELLING' | 'COMPLETED' | 'GPS_OFF';
+type Confidence = 'LOW' | 'MEDIUM' | 'HIGH';
+
+const TEST_MODE = true;
 
 const { width } = Dimensions.get('window');
 
-// 1. Core Branding & Primary Colors
 const COLORS = {
   navy: '#1A1F71',
   white: '#FFFFFF',
@@ -25,260 +35,404 @@ const COLORS = {
   red: '#DC2626',
   emerald: '#10B981',
   saffron: '#FF9F43',
-  slateMuted: '#64748B', // text-slate-500
-  slateBorder: '#CBD5E1', // border-slate-300
-  slateDark: '#1E293B', // text-slate-800
-  slatePillText: '#475569',
-  slatePillBg: '#F1F5F9',
-  navyGlow: 'rgba(26, 31, 113, 0.4)',
+  slateMuted: '#64748B',
+  slateBorder: '#CBD5E1',
+  slateDark: '#1E293B',
 };
 
-// Types
-type StationStatus = 'PASSED' | 'HALTED' | 'TARGET' | 'FUTURE' | 'DESTINATION';
+const MIN_HEIGHT = 80;
+const MAX_HEIGHT = 140;
 
-interface StationNode {
-  id: string;
-  name: string;
-  pf: string;
-  schArr: string;
-  actArr?: string; // If actual is different from scheduled (Delayed)
-  subText: string;
-  status: StationStatus;
-  distanceToNext?: number;
+// --- UTILS ---
+const toRad = (val: number) => (val * Math.PI) / 180;
+
+function getDistance(locA: { lat: number; lng: number }, locB: { lat: number; lng: number }) {
+  const R = 6371; // km
+  const dLat = toRad(locB.lat - locA.lat);
+  const dLng = toRad(locB.lng - locA.lng);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(locA.lat)) *
+      Math.cos(toRad(locB.lat)) *
+      Math.sin(dLng / 2) *
+      Math.sin(dLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
 }
 
-// Mock Data
-const STATIONS_MOCK: StationNode[] = [
-  { id: '1', name: 'NEW DELHI', pf: '12', schArr: '16:45', actArr: '16:45', subText: 'DEPARTED', status: 'PASSED', distanceToNext: 130 },
-  { id: '2', name: 'ALIGARH JN', pf: '02', schArr: '18:15', actArr: '18:30', subText: 'DEPARTED', status: 'PASSED', distanceToNext: 78 },
-  { id: '3', name: 'TUNDLA JN', pf: '05', schArr: '19:40', actArr: '20:00', subText: 'DEPARTED', status: 'PASSED', distanceToNext: 147 },
-  { id: '4', name: 'KANPUR JN', pf: '03', schArr: '20:45', actArr: '20:45', subText: '147 KM REMAINING', status: 'TARGET', distanceToNext: 194 },
-  { id: '5', name: 'PRAYAGRAJ JN', pf: '06', schArr: '23:30', subText: 'FUTURE', status: 'FUTURE', distanceToNext: 152 },
-  { id: '6', name: 'DDU JN', pf: '02', schArr: '01:15', subText: 'FUTURE', status: 'FUTURE', distanceToNext: 211 },
-  { id: '7', name: 'PATNA JN', pf: '01', schArr: '04:20', subText: 'FUTURE', status: 'FUTURE', distanceToNext: 123 },
-  { id: '8', name: 'KIUL JN', pf: '04', schArr: '06:10', subText: 'FUTURE', status: 'FUTURE', distanceToNext: 54 },
-  { id: '9', name: 'JHAJHA', pf: '02', schArr: '07:35', subText: 'FUTURE', status: 'FUTURE', distanceToNext: 155 },
-  { id: '10', name: 'ASN', pf: '05', schArr: '08:50', subText: 'FUTURE', status: 'FUTURE', distanceToNext: 200 },
-  { id: '11', name: 'SEALDAH', pf: '09', schArr: '11:15', subText: 'DESTINATION', status: 'DESTINATION' },
-];
+// Distance point to line segment
+function getDistanceFromSegment(
+  p: { lat: number; lng: number },
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number }
+) {
+  const d_ab = getDistance(a, b);
+  if (d_ab === 0) return getDistance(p, a);
 
-const calculateHeight = (distance?: number) => distance ? Math.max(100, Math.min(400, distance * 2.5)) : 100;
+  const d_pa = getDistance(p, a);
+  const d_pb = getDistance(p, b);
 
-const ITEM_HEIGHTS = STATIONS_MOCK.map(s => calculateHeight(s.distanceToNext));
-const ITEM_OFFSETS = ITEM_HEIGHTS.reduce((acc, h, i) => {
-  acc.push(i === 0 ? 0 : acc[i - 1] + ITEM_HEIGHTS[i - 1]);
-  return acc;
-}, [] as number[]);
+  // Hero's formula for area of triangle, then altitude = 2*area / base
+  const s = (d_ab + d_pa + d_pb) / 2;
+  const areaSq = s * (s - d_ab) * (s - d_pa) * (s - d_pb);
+  const area = Math.sqrt(Math.max(0, areaSq));
+  const altitude = (2 * area) / d_ab;
 
+  // Check if projection is outside segment AB (obtuse angles)
+  if (d_pa * d_pa > d_pb * d_pb + d_ab * d_ab) return d_pb;
+  if (d_pb * d_pb > d_pa * d_pa + d_ab * d_ab) return d_pa;
+
+  return altitude;
+}
+
+function normalize(val: number, minOut: number, maxOut: number) {
+  const minK = 5;
+  const maxK = 150;
+  const clamped = Math.max(minK, Math.min(maxK, val));
+  return minOut + ((clamped - minK) / (maxK - minK)) * (maxOut - minOut);
+}
+
+function getConfidence({ isMoving, isNearRoute, accuracy }: { isMoving: boolean; isNearRoute: boolean; accuracy: number }): Confidence {
+  if (!isMoving) return 'LOW';
+  if (isNearRoute && accuracy < 50) return 'HIGH';
+  return 'MEDIUM';
+}
+
+// --- MAIN COMPONENT ---
 export default function LiveStatusScreen() {
   const navigation = useNavigation<any>();
-  const flatListRef = useRef<FlatList>(null);
+  const route = useRoute<any>();
+  const pnr = route.params?.pnr;
 
-  // The index of the active station (either target or halted)
-  const activeIndex = STATIONS_MOCK.findIndex(s => s.status === 'TARGET' || s.status === 'HALTED');
+  // State
+  const [journey, setJourney] = useState<JourneyAPIData | null>(null);
+  const [isOffline, setIsOffline] = useState(false);
+  const [jState, setJState] = useState<JourneyState>('LOADING');
+  const [progress, setProgress] = useState<{ currentIndex: number; distanceToNext: number } | null>(null);
+  const [confidence, setConfidence] = useState<Confidence>('LOW');
+  const [layoutOffsets, setLayoutOffsets] = useState<{ [key: number]: number }>({});
   
-  const [showSnapBtn, setShowSnapBtn] = useState(false);
+  // Proximity State
+  const [isProximityEnabled, setIsProximityEnabled] = useState(false);
+  const [alertTriggered, setAlertTriggered] = useState(false);
+  
+  const scrollRef = useRef<ScrollView>(null);
+  const lastUpdateRef = useRef<number>(0);
+  const lastLocationRef = useRef<{lat: number, lng: number} | null>(null);
+  const lastAlertTimeRef = useRef<number>(0);
 
-  const snapToActive = useCallback(() => {
-    if (activeIndex !== -1 && flatListRef.current) {
-      // 90 is the approximate ITEM_HEIGHT we set in getItemLayout
-      flatListRef.current.scrollToIndex({ index: activeIndex, animated: true, viewPosition: 0.5 });
-      setShowSnapBtn(false);
+  const smoothLocation = useCallback((newLoc: { lat: number; lng: number }) => {
+    if (!lastLocationRef.current) {
+      lastLocationRef.current = newLoc;
+      return newLoc;
     }
-  }, [activeIndex]);
+    const dist = getDistance(lastLocationRef.current, newLoc);
+    if (dist > 2) return lastLocationRef.current; // ignore jumps > 2km
 
-  // Conditional System Status Logic
-  const [isWeakSignal, setIsWeakSignal] = useState(false);
-  const slideAnim = useRef(new RNAnimated.Value(100)).current; 
-  const pulseAnim = useRef(new RNAnimated.Value(1)).current;
-
-  // Simulate network latency issue triggering the bar after 2 seconds
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setIsWeakSignal(true);
-    }, 2000);
-    return () => clearTimeout(timer);
+    lastLocationRef.current = newLoc;
+    return newLoc;
   }, []);
 
-  useEffect(() => {
-    if (isWeakSignal) {
-      RNAnimated.spring(slideAnim, {
-        toValue: 0,
-        useNativeDriver: true,
-        bounciness: 4,
-      }).start();
-
-      RNAnimated.loop(
-        RNAnimated.sequence([
-          RNAnimated.timing(pulseAnim, { toValue: 0.3, duration: 800, useNativeDriver: true }),
-          RNAnimated.timing(pulseAnim, { toValue: 1, duration: 800, useNativeDriver: true })
-        ])
-      ).start();
-    } else {
-      RNAnimated.timing(slideAnim, {
-        toValue: 100,
-        duration: 300,
-        useNativeDriver: true,
-      }).start();
-      pulseAnim.stopAnimation();
-    }
-  }, [isWeakSignal, slideAnim, pulseAnim]);
-
-  const handleRetry = () => {
-    // Manual refetch trigger
-    setIsWeakSignal(false);
-    // Setting back to true after 5s just to demonstrate it coming back if it fails
-    setTimeout(() => setIsWeakSignal(true), 5000);
-  };
-
-  // on viewable items change to track if we scrolled far from the active node
-  const onViewableItemsChanged = useRef(({ viewableItems }: any) => {
-    if (viewableItems && viewableItems.length > 0) {
-      const visibleIndices = viewableItems.map((item: any) => item.index);
-      if (!visibleIndices.includes(activeIndex)) {
-        setShowSnapBtn(true);
-      } else {
-        setShowSnapBtn(false);
-      }
-    }
-  }).current;
-
-  // Smooth Slide Animation Logic
-  const trainY = useSharedValue(0);
-
-  useEffect(() => {
-    let interval: NodeJS.Timeout;
-    
-    // Polling simulation every 30 seconds
-    const simulatePolling = () => {
-      // Predict progress from Start to Next over 30s
-      const startNodeIndex = STATIONS_MOCK.findIndex(s => s.status === 'PASSED' && STATIONS_MOCK[STATIONS_MOCK.indexOf(s) + 1]?.status === 'TARGET');
-      const segmentHeight = startNodeIndex >= 0 ? ITEM_HEIGHTS[startNodeIndex] : 100;
-
-      const currentVal = trainY.value;
-      const progressChunk = segmentHeight * 0.15; // Simulating train covering 15% of segment total per poll interval
-      const targetVal = Math.min(segmentHeight, currentVal + progressChunk); // Capped at segment length
-      
-      // Snap correction
-      if (Math.abs(targetVal - currentVal) > (segmentHeight * 0.3)) {
-        trainY.value = withSpring(targetVal, { damping: 15 });
-      } else {
-        // Smooth slide over the full 30 seconds interval
-        trainY.value = withTiming(targetVal, { duration: 30000, easing: Easing.linear });
-      }
-    };
-
-    simulatePolling();
-    interval = setInterval(simulatePolling, 30000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const animatedTrainStyle = useAnimatedStyle(() => {
-    return {
-      transform: [{ translateY: trainY.value }],
-    };
+  // 1. TanStack Query
+  const { data: fetchedJourney, isLoading, error } = useQuery({
+    queryKey: ['journey', pnr],
+    queryFn: () => fetchJourneyData(pnr),
+    enabled: !!pnr,
+    staleTime: Infinity,
+    retry: 2,
+    retryDelay: 1000,
   });
 
-  // Render individual timeline item
-  const renderItem = ({ item, index }: { item: StationNode; index: number }) => {
-    const isFirst = index === 0;
-    const isLast = index === STATIONS_MOCK.length - 1;
-    const currentItemHeight = ITEM_HEIGHTS[index];
+  // 2. Cache Sync (Offline support)
+  useEffect(() => {
+    const syncData = async () => {
+      if (fetchedJourney) {
+        setJourney(fetchedJourney);
+        setIsOffline(false);
+        await AsyncStorage.setItem('journey_cache', JSON.stringify(fetchedJourney));
+      } else if (!isLoading) {
+        const cached = await AsyncStorage.getItem('journey_cache');
+        if (cached) {
+          setJourney(JSON.parse(cached));
+          setIsOffline(true);
+        }
+      }
+    };
+    syncData();
+  }, [fetchedJourney, isLoading]);
 
-    // Time Formatting
-    const isDelayed = item.actArr && item.actArr !== item.schArr;
-    
-    // Status Logic
-    const isPassed = item.status === 'PASSED' || item.status === 'HALTED';
-    const isTarget = item.status === 'TARGET';
-    const isDestination = item.status === 'DESTINATION';
+  // 2.5 Proximity Init & Reset
+  useEffect(() => {
+    const setupProximity = async () => {
+      const lastPnr = await AsyncStorage.getItem('last_tracked_pnr');
+      if (pnr && lastPnr !== pnr) {
+        await AsyncStorage.removeItem('alert_triggered');
+        await AsyncStorage.setItem('last_tracked_pnr', pnr);
+        setAlertTriggered(false);
+        lastAlertTimeRef.current = 0;
+      } else {
+        const aTriggered = await AsyncStorage.getItem('alert_triggered');
+        if (aTriggered) setAlertTriggered(true);
+      }
 
-    const isStartStation = item.status === 'PASSED' && STATIONS_MOCK[index + 1]?.status === 'TARGET';
+      const pEnabled = await AsyncStorage.getItem('proximity_enabled');
+      if (pEnabled) setIsProximityEnabled(JSON.parse(pEnabled));
+    };
+    setupProximity();
+  }, [pnr]);
 
+  useEffect(() => {
+    if (jState === 'COMPLETED') {
+      AsyncStorage.removeItem('alert_triggered');
+    }
+  }, [jState]);
+
+  // 3. Base State Determination
+  useEffect(() => {
+    if (isLoading && !journey) {
+      setJState('LOADING');
+      return;
+    }
+    if (!journey) return;
+
+    const now = Date.now();
+    // Assuming backend returns startTime / endTime in epoch ms
+    if (now < journey.startTime) jState !== 'GPS_OFF' && setJState('UPCOMING');
+    else if (now > journey.endTime) jState !== 'GPS_OFF' && setJState('COMPLETED');
+    else {
+      if (jState !== 'NOT_TRAVELLING' && jState !== 'GPS_OFF') {
+        setJState('ACTIVE');
+      }
+    }
+  }, [journey, isLoading]);
+
+  // 4. Location Engine
+  useEffect(() => {
+    if (jState !== 'ACTIVE' && jState !== 'NOT_TRAVELLING') return;
+
+    let sub: Location.LocationSubscription;
+
+    const startTracking = async () => {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        setJState('GPS_OFF');
+        return;
+      }
+
+      const cachedLoc = await AsyncStorage.getItem('last_location');
+      if (cachedLoc && !progress && jState === 'NOT_TRAVELLING') {
+        // Hydrate silently if needed, but wait for fresh update
+      }
+
+      if (TEST_MODE) return; // Prevent real tracking in test mode
+
+      sub = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.Balanced,
+          distanceInterval: 200, // meters
+          timeInterval: 5000,
+        },
+        (location) => handleLocationUpdate(location)
+      );
+    };
+
+    startTracking();
+
+    return () => {
+      sub?.remove();
+    };
+  }, [jState, journey]);
+
+  const handleLocationUpdate = useCallback(
+    async (location: Location.LocationObject) => {
+      if (!journey || !journey.stations || journey.stations.length === 0) return;
+
+      const now = Date.now();
+      // Throttling: Return early if < 3s since last handled update
+      if (now - lastUpdateRef.current < 3000) return;
+      lastUpdateRef.current = now;
+
+      await AsyncStorage.setItem('last_location', JSON.stringify(location));
+
+      const speedMs = location.coords.speed || 0;
+      const speedKmH = speedMs * 3.6;
+
+      // Speed check: between 20km/h and 140km/h
+      const isMoving = speedKmH > 20 && speedKmH < 140;
+
+      // GPS Anti-Jump Smoothing
+      const smoothedCoords = smoothLocation({
+        lat: location.coords.latitude,
+        lng: location.coords.longitude,
+      });
+
+      const stations = journey.stations;
+      let minRouteDist = Infinity;
+      let nearestIdx = 0;
+
+      // Segment Check
+      for (let i = 0; i < stations.length - 1; i++) {
+        const d = getDistanceFromSegment(
+          smoothedCoords,
+          stations[i],
+          stations[i + 1]
+        );
+        if (d < minRouteDist) {
+          minRouteDist = d;
+          nearestIdx = i; // The current station passed is i
+        }
+      }
+
+      const isNearRoute = minRouteDist < 5; // km threshold
+
+      if (!isNearRoute || !isMoving) {
+        if (!TEST_MODE) {
+          setJState('NOT_TRAVELLING');
+          return;
+        }
+      }
+
+      setJState('ACTIVE');
+
+      // Confidence System
+      const locAcc = location.coords.accuracy || Infinity;
+      const conf = getConfidence({ isMoving: isMoving || TEST_MODE, isNearRoute, accuracy: locAcc });
+      setConfidence(conf);
+
+      const distToNextNode = getDistance(
+        smoothedCoords,
+        stations[Math.min(nearestIdx + 1, stations.length - 1)]
+      );
+
+      // --- PROXIMITY ALERT ENGINE ---
+      if (isProximityEnabled && conf !== 'LOW') {
+        const destNode = stations[stations.length - 1];
+        const distToDest = getDistance(smoothedCoords, destNode);
+        
+        if (distToDest < 10 && !alertTriggered) {
+          const nowMs = Date.now();
+          if (nowMs - lastAlertTimeRef.current > 60000) {
+            lastAlertTimeRef.current = nowMs;
+            
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            Notifications.scheduleNotificationAsync({
+              content: {
+                title: 'Arrival Alert 🚆',
+                body: 'You are near your destination station!',
+              },
+              trigger: null,
+            });
+
+            setAlertTriggered(true);
+            AsyncStorage.setItem('alert_triggered', 'true');
+          }
+        }
+      }
+
+      // Progression Lock
+      setProgress((prev) => {
+        if (prev && nearestIdx < prev.currentIndex) {
+          return prev; // Never allow backward movement
+        }
+        return {
+          currentIndex: Math.max(nearestIdx, prev?.currentIndex || 0),
+          distanceToNext: Math.round(distToNextNode),
+        };
+      });
+    },
+    [journey, smoothLocation]
+  );
+
+  // 5. Auto Scroll
+  useEffect(() => {
+    if (progress && layoutOffsets[progress.currentIndex] !== undefined) {
+      scrollRef.current?.scrollTo({
+        y: Math.max(0, layoutOffsets[progress.currentIndex] - 40),
+        animated: true,
+      });
+    }
+  }, [progress, layoutOffsets]);
+
+  // 6. Test Mode Simulator Component
+  useEffect(() => {
+    if (!TEST_MODE || !journey) return;
+    setJState('ACTIVE'); // force active
+
+    let mockIndex = 0;
+    const interval = setInterval(() => {
+      const stations = journey.stations;
+      if (mockIndex >= stations.length) {
+        clearInterval(interval);
+        setJState('COMPLETED');
+        return;
+      }
+      const st = stations[mockIndex];
+      // Emit mock location frame
+      handleLocationUpdate({
+        coords: {
+          latitude: st.lat,
+          longitude: st.lng,
+          speed: 30, // 30 m/s (~108 km/h) = isMoving true
+          accuracy: 10,
+          altitude: 0,
+          heading: 0,
+          altitudeAccuracy: 0,
+        },
+        timestamp: Date.now(),
+      } as Location.LocationObject);
+      
+      mockIndex++;
+    }, 4000); // jump stations every 4 seconds
+
+    return () => clearInterval(interval);
+  }, [TEST_MODE, journey, handleLocationUpdate]);
+
+  // --- RENDERS ---
+  if (!pnr) {
+    return <EmptyState text="Enter PNR to start tracking" onBack={() => navigation.goBack()} />;
+  }
+
+  if (isLoading) {
     return (
-      <View style={[styles.nodeRow, { height: currentItemHeight }]}>
-        {/* Left Time Column */}
-        <View style={styles.timeColumn}>
-          {isDelayed ? (
-            <>
-              <Text style={styles.timeSchDelayed}>{item.schArr}</Text>
-              <Text style={styles.timeActDelayed}>{item.actArr}</Text>
-            </>
-          ) : (
-            <Text style={styles.timeOnTime}>{item.schArr}</Text>
-          )}
-        </View>
-
-        {/* Center Track Column */}
-        <View style={styles.trackColumn}>
-          {/* Top Line */}
-          {!isFirst && (
-            <View style={[
-              styles.lineTop,
-              isPassed || isTarget ? styles.lineSolid : styles.lineDashed
-            ]} />
-          )}
-
-          {/* Node Circular Indicator */}
-          <View style={styles.nodeWrapper}>
-            {isStartStation && (
-              <Animated.View style={[styles.nodeTrain, animatedTrainStyle]}>
-                <MaterialCommunityIcons name="train" size={16} color={COLORS.white} />
-              </Animated.View>
-            )}
-
-            {isDestination ? (
-              <View style={styles.nodeDestination}>
-                <Feather name="flag" size={14} color={COLORS.white} />
-              </View>
-            ) : isTarget ? (
-              <View style={styles.nodeTarget}>
-                <View style={styles.nodeTargetInner} />
-              </View>
-            ) : isPassed ? (
-              <View style={styles.nodePassed}>
-                <MaterialIcons name="check" size={16} color={COLORS.white} />
-              </View>
-            ) : (
-              <View style={styles.nodeFuture} />
-            )}
-          </View>
-
-          {/* Bottom Line */}
-          {!isLast && (
-            <View style={[
-              styles.lineBottom,
-              isPassed ? styles.lineSolid : styles.lineDashed
-            ]} />
-          )}
-
-          {/* Floating Distance Label */}
-          {!isLast && item.distanceToNext && item.distanceToNext > 50 && (
-            <View style={[styles.distanceLabelContainer, { top: currentItemHeight * 0.5 }]}>
-              <Text style={styles.distanceLabelText}>{Math.round(item.distanceToNext)} KM</Text>
-            </View>
-          )}
-        </View>
-
-        {/* Right Info Column */}
-        <View style={styles.infoColumn}>
-          <Text style={styles.stationName}>{item.name}</Text>
-          <View style={styles.metaRow}>
-            <View style={styles.pfPill}>
-              <Text style={styles.pfText}>PF {item.pf}</Text>
-            </View>
-            <Text style={styles.subText}>{item.subText}</Text>
-          </View>
-        </View>
-      </View>
+      <SafeAreaView style={[styles.safeArea, { alignItems: 'center', justifyContent: 'center' }]}>
+        <StatusBar barStyle="light-content" backgroundColor={COLORS.navy} />
+        <ActivityIndicator size="large" color={COLORS.emerald} />
+        <Text style={{ marginTop: 10, color: COLORS.white, fontWeight: '700' }}>Fetching Journey...</Text>
+      </SafeAreaView>
     );
-  };
+  }
+
+  if (!journey || !journey.stations || journey.stations.length === 0) {
+    return <EmptyState text="No journey found" onBack={() => navigation.goBack()} />;
+  }
+
+  if (jState === 'UPCOMING') {
+    return <UpcomingScreen onBack={() => navigation.goBack()} />;
+  }
+
+  if (jState === 'COMPLETED') {
+    return <CompletedScreen onBack={() => navigation.goBack()} />;
+  }
+
+  if (jState === 'ACTIVE' && !progress) {
+    return (
+      <SafeAreaView style={[styles.safeArea, { alignItems: 'center', justifyContent: 'center' }]}>
+        <StatusBar barStyle="light-content" backgroundColor={COLORS.navy} />
+        <ActivityIndicator size="large" color={COLORS.emerald} />
+        <Text style={{ marginTop: 10, color: COLORS.white, fontWeight: '700' }}>Syncing location...</Text>
+      </SafeAreaView>
+    );
+  }
+
+  const stations = journey.stations;
+  const nextStationIndex = progress ? Math.min(progress.currentIndex + 1, stations.length - 1) : 0;
+  const nextStationName = stations[nextStationIndex]?.name;
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="light-content" backgroundColor={COLORS.navy} />
-      
-      {/* HEADER SECTION - Navy (#1A1F71) */}
+
+      {/* HEADER SECTION */}
       <View style={styles.header}>
         <View style={styles.headerTopRow}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={{ padding: 8, marginLeft: -8 }}>
@@ -286,88 +440,177 @@ export default function LiveStatusScreen() {
           </TouchableOpacity>
           <Text style={styles.headerTitle}>BHARATPATH LIVE</Text>
           <View style={styles.delayPill}>
-            <Text style={styles.delayPillText}>15M DELAY</Text>
+            <Text style={[styles.delayPillText, { color: COLORS.white }]}>
+               {confidence} CONFIDENCE
+            </Text>
           </View>
-          <TouchableOpacity>
-            <Feather name="settings" size={20} color={COLORS.white} />
-          </TouchableOpacity>
         </View>
 
         <View style={styles.trainInfoRow}>
           <Text style={styles.liveTrackingText}>LIVE TRACKING</Text>
-          <Text style={styles.trainNumberName}>12259 SEALDAH DURONTO</Text>
+          <Text style={styles.trainNumberName}>{journey.trainName}</Text>
         </View>
       </View>
 
-      {/* FOREGROUND CARD - Target Node Focus (Overlaps header) */}
+      {/* OVERLAP FOREGROUND CARD */}
       <View style={styles.focusCardContainer}>
         <View style={styles.focusCard}>
           <Text style={styles.nextStopLabel}>NEXT STOP</Text>
-          <Text style={styles.nextStopValue}>KANPUR JN</Text>
+          <Text style={styles.nextStopValue}>{nextStationName}</Text>
           <View style={styles.focusCardDivider} />
           <View style={styles.focusCardBottom}>
             <View style={styles.focusMetric}>
               <Text style={styles.metricLabel}>EST. ARRIVAL</Text>
-              <Text style={styles.metricValue}>20:45</Text>
+              <Text style={styles.metricValue}>{stations[nextStationIndex]?.time || '--:--'}</Text>
             </View>
             <View style={styles.focusMetricBorder} />
             <View style={styles.focusMetric}>
               <Text style={styles.metricLabel}>DISTANCE</Text>
-              <Text style={styles.metricValue}>147 <Text style={{ fontSize: 14 }}>KM</Text></Text>
+              <Text style={styles.metricValue}>{progress?.distanceToNext ?? '--'} <Text style={{ fontSize: 14 }}>KM</Text></Text>
             </View>
           </View>
         </View>
       </View>
 
-      {/* TIMELINE SECTION Wrapper */}
-      <View style={styles.timelineWrapper}>
-        <View style={styles.timelineListContainer}>
-          <FlatList
-            ref={flatListRef}
-            data={STATIONS_MOCK}
-            keyExtractor={(item) => item.id}
-            renderItem={renderItem}
-            contentContainerStyle={styles.timelineContentContainer}
-            showsVerticalScrollIndicator={false}
-            initialScrollIndex={activeIndex > 1 ? activeIndex - 1 : 0}
-            getItemLayout={(data, index) => ({
-              length: ITEM_HEIGHTS[index] || 100,
-              offset: ITEM_OFFSETS[index] || 0,
-              index,
-            })}
-            onViewableItemsChanged={onViewableItemsChanged}
-            viewabilityConfig={{ itemVisiblePercentThreshold: 50 }}
-            ListFooterComponent={<View style={{ height: 100 }} />}
-          />
+      {/* EDGE CASE BANNERS */}
+      {isOffline && (
+        <View style={[styles.banner, { backgroundColor: COLORS.saffron }]}>
+          <Text style={styles.bannerText}>Using last synced data</Text>
         </View>
-
-        {/* Conditional System Status Bar */}
-        <RNAnimated.View style={[styles.statusBarContainer, { transform: [{ translateY: slideAnim }] }]}>
-          <View style={styles.statusBarContent}>
-            <RNAnimated.View style={{ opacity: pulseAnim, marginRight: 10 }}>
-              <MaterialCommunityIcons name="broadcast" size={22} color="#D97706" />
-            </RNAnimated.View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.statusBarText}>Weak Signal: Showing last synced coordinates.</Text>
-            </View>
-            <TouchableOpacity style={styles.statusBarBtn} onPress={handleRetry} activeOpacity={0.8}>
-              <Text style={styles.statusBarBtnText}>RETRY</Text>
-            </TouchableOpacity>
-          </View>
-        </RNAnimated.View>
-      </View>
-
-      {/* Snap to Live Floating Button */}
-      {showSnapBtn && (
-        <TouchableOpacity style={styles.snapBtn} onPress={snapToActive} activeOpacity={0.9}>
-          <Feather name="crosshair" size={18} color={COLORS.white} />
-          <Text style={styles.snapBtnText}>Snap to Live</Text>
-        </TouchableOpacity>
+      )}
+      {jState === 'GPS_OFF' && (
+        <View style={[styles.banner, { backgroundColor: COLORS.red }]}>
+          <Text style={[styles.bannerText, { color: COLORS.white }]}>Enable location for live tracking.</Text>
+        </View>
+      )}
+      {jState === 'NOT_TRAVELLING' && (
+        <View style={[styles.banner, { backgroundColor: COLORS.slateDark }]}>
+          <Text style={[styles.bannerText, { color: COLORS.white }]}>Tracking will start when movement is detected.</Text>
+        </View>
       )}
 
+      {/* TIMELINE LIST */}
+      <View style={styles.timelineWrapper}>
+        <View style={styles.timelineListContainer}>
+          <ScrollView
+            ref={scrollRef}
+            contentContainerStyle={styles.scrollContent}
+            showsVerticalScrollIndicator={false}
+          >
+            {stations.map((station, index) => {
+              const isFirst = index === 0;
+              const isLast = index === stations.length - 1;
+              const isActiveNode = progress && index === progress.currentIndex;
+              const isPassed = progress && index <= progress.currentIndex;
+
+              // Calculate Next Segment Distance for Height Normalization
+              let segmentHeight = MIN_HEIGHT;
+              if (!isLast) {
+                const nextStation = stations[index + 1];
+                const physicalDist = nextStation.distance - station.distance; // Assuming cumulated distances in km
+                segmentHeight = normalize(physicalDist, MIN_HEIGHT, MAX_HEIGHT);
+              }
+
+              return (
+                <View 
+                  key={index} 
+                  style={[styles.row, { height: isLast ? 80 : segmentHeight }]}
+                  onLayout={(event) => {
+                    const { y } = event.nativeEvent.layout;
+                    setLayoutOffsets(prev => ({...prev, [index]: y}));
+                  }}
+                >
+                  {/* TIME */}
+                  <Text style={[styles.time, isPassed && styles.timeCompleted]}>{station.time}</Text>
+
+                  {/* LINE & DOT */}
+                  <View style={styles.timelineContainer}>
+                    {!isLast && (
+                      <View style={[styles.line, isPassed ? styles.lineSolid : styles.lineDashed]} />
+                    )}
+
+                    <View
+                      style={[
+                        styles.dot,
+                        isPassed && styles.completedDot,
+                        isActiveNode && styles.currentDot,
+                        isLast && styles.destinationDot,
+                        !isPassed && !isLast && !isActiveNode && styles.upcomingDot,
+                      ]}
+                    >
+                      {isActiveNode ? (
+                         <MaterialCommunityIcons name="train" size={16} color={COLORS.white} />
+                      ) : isLast ? (
+                         <Feather name="flag" size={14} color={COLORS.white} />
+                      ) : isPassed ? (
+                         <MaterialCommunityIcons name="check" size={14} color={COLORS.white} />
+                      ) : null}
+                    </View>
+                  </View>
+
+                  {/* CONTENT */}
+                  <View style={styles.content}>
+                    <Text style={styles.stationName}>{station.name}</Text>
+
+                    {isActiveNode && (
+                      <Text style={styles.status}>
+                        {progress?.distanceToNext} KM REMAINING
+                      </Text>
+                    )}
+                    {isPassed && !isActiveNode && (
+                      <Text style={styles.remaining}>DEPARTED</Text>
+                    )}
+                    {!isPassed && !isLast && (
+                      <Text style={styles.remaining}>UPCOMING</Text>
+                    )}
+                    {isLast && (
+                      <Text style={styles.remaining}>DESTINATION</Text>
+                    )}
+                  </View>
+                </View>
+              );
+            })}
+          </ScrollView>
+        </View>
+      </View>
     </SafeAreaView>
   );
 }
+
+const EmptyState = ({ text, onBack }: { text: string; onBack: () => void }) => (
+  <SafeAreaView style={[styles.safeArea, { alignItems: 'center', justifyContent: 'center' }]}>
+    <StatusBar barStyle="light-content" backgroundColor={COLORS.navy} />
+    <Feather name="info" size={48} color={COLORS.slateMuted} style={{ marginBottom: 16 }} />
+    <Text style={{ color: COLORS.white, fontSize: 16, fontWeight: '700', marginBottom: 24 }}>{text}</Text>
+    <TouchableOpacity onPress={onBack} style={{ paddingHorizontal: 20, paddingVertical: 10, backgroundColor: COLORS.white, borderRadius: 8 }}>
+      <Text style={{ color: COLORS.navy, fontWeight: '800' }}>Go Back</Text>
+    </TouchableOpacity>
+  </SafeAreaView>
+);
+
+const UpcomingScreen = ({ onBack }: { onBack: () => void }) => (
+  <SafeAreaView style={[styles.safeArea, { alignItems: 'center', justifyContent: 'center' }]}>
+    <StatusBar barStyle="light-content" backgroundColor={COLORS.navy} />
+    <MaterialCommunityIcons name="clock-outline" size={48} color={COLORS.emerald} style={{ marginBottom: 16 }} />
+    <Text style={{ color: COLORS.white, fontSize: 18, fontWeight: '800', marginBottom: 8 }}>Journey Not Started</Text>
+    <Text style={{ color: COLORS.slateBorder, fontSize: 14, marginBottom: 24 }}>Your train hasn't departed yet.</Text>
+    <TouchableOpacity onPress={onBack} style={{ paddingHorizontal: 20, paddingVertical: 10, backgroundColor: COLORS.white, borderRadius: 8 }}>
+      <Text style={{ color: COLORS.navy, fontWeight: '800' }}>Go Back</Text>
+    </TouchableOpacity>
+  </SafeAreaView>
+);
+
+const CompletedScreen = ({ onBack }: { onBack: () => void }) => (
+  <SafeAreaView style={[styles.safeArea, { alignItems: 'center', justifyContent: 'center' }]}>
+    <StatusBar barStyle="light-content" backgroundColor={COLORS.navy} />
+    <Feather name="check-circle" size={48} color={COLORS.emerald} style={{ marginBottom: 16 }} />
+    <Text style={{ color: COLORS.white, fontSize: 18, fontWeight: '800', marginBottom: 8 }}>Journey Completed</Text>
+    <Text style={{ color: COLORS.slateBorder, fontSize: 14, marginBottom: 24 }}>You have reached your destination.</Text>
+    <TouchableOpacity onPress={onBack} style={{ paddingHorizontal: 20, paddingVertical: 10, backgroundColor: COLORS.white, borderRadius: 8 }}>
+      <Text style={{ color: COLORS.navy, fontWeight: '800' }}>Go Back</Text>
+    </TouchableOpacity>
+  </SafeAreaView>
+);
 
 const styles = StyleSheet.create({
   safeArea: {
@@ -378,7 +621,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.navy,
     paddingHorizontal: 20,
     paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 20) : 10,
-    paddingBottom: 80, // Extra padding for overlapping card
+    paddingBottom: 80,
   },
   headerTopRow: {
     flexDirection: 'row',
@@ -394,14 +637,13 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   delayPill: {
-    backgroundColor: COLORS.saffron,
+    backgroundColor: 'rgba(255,255,255,0.2)', // Modified for confidence
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 6,
   },
   delayPillText: {
-    color: COLORS.navy,
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '900',
   },
   trainInfoRow: {
@@ -421,11 +663,9 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: -0.5,
   },
-
-  // Focus Card (Overlap)
   focusCardContainer: {
     alignItems: 'center',
-    marginTop: -60, // Overlap the navy header
+    marginTop: -60,
     zIndex: 10,
   },
   focusCard: {
@@ -489,12 +729,28 @@ const styles = StyleSheet.create({
     opacity: 0.4,
   },
 
-  // Timeline Container
+  banner: {
+    zIndex: 20,
+    marginHorizontal: 16,
+    marginTop: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    elevation: 3,
+  },
+  bannerText: {
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    color: COLORS.slateDark,
+  },
+
   timelineWrapper: {
     flex: 1,
     backgroundColor: COLORS.offWhite,
-    marginTop: -40, // Pull up to meet under the card seamlessly
-    paddingTop: 60, // visual padding under card
+    marginTop: -40,
+    paddingTop: 50, // pull up offset for overlapping card/banner
   },
   timelineListContainer: {
     flex: 1,
@@ -502,253 +758,119 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 36,
     borderTopRightRadius: 36,
     marginHorizontal: 16,
-    paddingTop: 32,
-    // Provide an illusion of a card
+    paddingTop: 10,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -4 },
     shadowOpacity: 0.03,
     shadowRadius: 10,
     elevation: 2,
-    marginBottom: 80, // Space for the alert bar at bottom
   },
-  timelineContentContainer: {
+  scrollContent: {
+    paddingTop: 20,
     paddingHorizontal: 20,
+    paddingBottom: 80,
   },
-
-  // List Items
-  nodeRow: {
+  row: {
     flexDirection: 'row',
-    minHeight: 100, // ensuring consistent height for tracking layout
+    alignItems: 'flex-start',
+    marginBottom: 0,
   },
-  timeColumn: {
+  time: {
     width: 60,
-    alignItems: 'flex-end',
-    paddingRight: 12,
-    paddingTop: 10, // match the center of the node circle
-  },
-  timeOnTime: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: COLORS.slateDark,
-  },
-  timeSchDelayed: {
     fontSize: 14,
-    fontWeight: '600',
-    color: COLORS.slateMuted,
-    textDecorationLine: 'line-through',
-  },
-  timeActDelayed: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: COLORS.red,
+    fontWeight: '700',
+    color: COLORS.slateDark,
+    textAlign: 'right',
     marginTop: 2,
   },
-  
-  // Track visual line logic
-  trackColumn: {
-    width: 24,
+  timeCompleted: {
+    color: COLORS.slateMuted,
+  },
+  timelineContainer: {
+    width: 40,
     alignItems: 'center',
   },
-  lineTop: {
-    flex: 1,
-    width: 3,
-  },
-  lineBottom: {
-    flex: 1,
-    width: 3,
+  line: {
+    position: 'absolute',
+    width: 2,
+    height: '100%',
+    top: 10,
+    bottom: -10,
   },
   lineSolid: {
     backgroundColor: COLORS.navy,
   },
   lineDashed: {
-    width: 0,
-    borderWidth: 1.5,
-    borderColor: COLORS.slateBorder,
-    borderStyle: 'dashed',
-  },
-  distanceLabelContainer: {
-    position: 'absolute',
-    alignSelf: 'center',
-    backgroundColor: COLORS.white,
     borderWidth: 1,
     borderColor: COLORS.slateBorder,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
+    borderStyle: 'dashed',
+    backgroundColor: 'transparent',
+    width: 0,
+  },
+  dot: {
+    width: 24,
+    height: 24,
     borderRadius: 12,
-    zIndex: 5,
-  },
-  distanceLabelText: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: COLORS.slateMuted,
-  },
-  nodeWrapper: {
     alignItems: 'center',
     justifyContent: 'center',
-    marginVertical: -8, // slight negative overlap so line connects cleanly
-    height: 38,
-    width: 38,
+    backgroundColor: COLORS.slateBorder,
     zIndex: 2,
+    marginTop: 0,
   },
-  
-  // Different Nodes
-  nodeTrain: {
-    position: 'absolute',
+  completedDot: {
+    backgroundColor: COLORS.navy,
+  },
+  currentDot: {
+    backgroundColor: COLORS.navy,
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: COLORS.navy,
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 20,
-    shadowColor: '#000',
+    marginTop: -4,
+    shadowColor: COLORS.navy,
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
-    elevation: 6,
+    shadowOpacity: 0.4,
+    shadowRadius: 6,
+    elevation: 5,
   },
-  nodePassed: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: COLORS.navy,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  nodeFuture: {
+  upcomingDot: {
     width: 14,
     height: 14,
     borderRadius: 7,
-    backgroundColor: COLORS.slateBorder,
-  },
-  nodeTarget: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
     backgroundColor: COLORS.white,
-    borderWidth: 5,
+    borderWidth: 4,
     borderColor: COLORS.navy,
-    alignItems: 'center',
-    justifyContent: 'center',
+    marginTop: 5,
   },
-  nodeTargetInner: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+  destinationDot: {
     backgroundColor: COLORS.navy,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    marginTop: -4,
   },
-  nodeDestination: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: COLORS.navy,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#3b82f6', // blue-400 glow
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.5,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-
-  infoColumn: {
+  content: {
     flex: 1,
-    paddingLeft: 16,
-    paddingTop: 10,
-    paddingBottom: 20,
+    marginLeft: 10,
+    marginTop: 2,
+    paddingBottom: 30,
   },
   stationName: {
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '800',
     color: COLORS.slateDark,
     letterSpacing: -0.2,
   },
-  metaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 6,
-  },
-  pfPill: {
-    backgroundColor: COLORS.slatePillBg,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  pfText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: COLORS.slatePillText,
-  },
-  subText: {
-    marginLeft: 10,
+  status: {
     fontSize: 12,
     fontWeight: '700',
+    color: COLORS.red, // To indicate action/live distance
+    marginTop: 4,
+  },
+  remaining: {
+    fontSize: 11,
+    fontWeight: '700',
     color: COLORS.slateMuted,
-  },
-
-  // Conditional System Status Bar
-  statusBarContainer: {
-    position: 'absolute',
-    bottom: Platform.OS === 'ios' ? 24 : 16,
-    left: 16,
-    right: 16,
-    backgroundColor: '#FFFBEB', // bg-amber-50 equivalent
-    borderRadius: 16, // rounded-2xl
-    padding: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 4,
-    zIndex: 30, // Prevent overlapping issues with lower nodes
-  },
-  statusBarContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  statusBarText: {
-    color: '#475569', // text-slate-600 equivalent
-    fontSize: 12, // size-xs
-    fontWeight: '500', // font-medium
-    letterSpacing: 0.2,
-  },
-  statusBarBtn: {
-    backgroundColor: '#0F172A', // bg-navy-900 equivalent
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 12,
-    marginLeft: 8,
-  },
-  statusBarBtnText: {
-    color: '#FFFFFF', // text-white
-    fontSize: 12,
-    fontWeight: '800',
+    marginTop: 4,
     letterSpacing: 0.5,
-  },
-
-  // Floating Snap Button
-  snapBtn: {
-    position: 'absolute',
-    bottom: 110, // visually above the alert block
-    right: 20,
-    backgroundColor: COLORS.navy,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 24,
-    shadowColor: COLORS.navy,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-    elevation: 6,
-    zIndex: 20,
-  },
-  snapBtnText: {
-    color: COLORS.white,
-    fontWeight: '800',
-    fontSize: 14,
-    marginLeft: 8,
   },
 });

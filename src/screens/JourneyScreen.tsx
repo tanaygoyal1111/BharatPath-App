@@ -31,7 +31,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import Svg, { Circle, Line, Path, Defs, RadialGradient, Stop, Rect, Text as SvgText } from 'react-native-svg';
 import { BottomNav } from '../components/Navigation/BottomNav';
-import { fetchJourneyData, JourneyAPIData } from '../services/journeyService';
+import { fetchJourneyData, JourneyAPIData, fetchAmenities, AmenitiesAPIResponse } from '../services/journeyService';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -76,15 +76,9 @@ interface Amenity {
   id: string;
   label: string;
   icon: string;
-  count?: number;
+  count: number;
+  emptyText: string;
 }
-
-// ─── DEFAULT AMENITIES (always shown) ────────────────────────
-const DEFAULT_AMENITIES: Amenity[] = [
-  { id: '1', label: 'Hospitals', icon: 'local-hospital', count: 3 },
-  { id: '2', label: 'Hotels', icon: 'hotel', count: 5 },
-  { id: '3', label: 'Station Exits', icon: 'exit-to-app', count: 4 },
-];
 
 // ─── SHIMMER PLACEHOLDER ─────────────────────────────────────
 const ShimmerBlock = memo(({ width: w, height: h, style }: { width: number | string; height: number; style?: any }) => {
@@ -318,7 +312,7 @@ const MapCard = memo(({ destinationName, distanceKm, isLoading }: { destinationN
 });
 
 // ─── AMENITY LIST ITEM ───────────────────────────────────────
-const AmenityItem = memo(({ item, index }: { item: Amenity; index: number }) => {
+const AmenityItem = memo(({ item, index, onPress }: { item: Amenity; index: number; onPress?: () => void }) => {
   const getAmenityIcon = (icon: string) => {
     switch (icon) {
       case 'local-hospital': return 'hospital-building';
@@ -339,26 +333,116 @@ const AmenityItem = memo(({ item, index }: { item: Amenity; index: number }) => 
 
   return (
     <Animated.View entering={FadeInDown.duration(400).delay(400 + index * 120)}>
-      <TouchableOpacity style={styles.amenityItem} activeOpacity={0.7}>
+      <TouchableOpacity style={styles.amenityItem} activeOpacity={0.7} onPress={onPress}>
         <View style={[styles.amenityIconWrap, { backgroundColor: getAmenityColor(item.icon) + '12' }]}>
           <MaterialCommunityIcons name={getAmenityIcon(item.icon) as any} size={22} color={getAmenityColor(item.icon)} />
         </View>
-        <Text style={styles.amenityLabel}>{item.label}</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.amenityLabel}>{item.label}</Text>
+          {item.count > 0 ? (
+            <Text style={styles.amenityCount}>{item.count} nearby</Text>
+          ) : (
+            <Text style={styles.amenityEmpty}>{item.emptyText}</Text>
+          )}
+        </View>
         <Feather name="chevron-right" size={20} color={COLORS.mutedSlate} />
       </TouchableOpacity>
     </Animated.View>
   );
 });
 
-// ─── AMENITIES LIST ──────────────────────────────────────────
-const AmenitiesList = memo(({ amenities }: { amenities: Amenity[] }) => (
-  <Animated.View entering={FadeInDown.duration(500).delay(350)} style={styles.amenitiesSection}>
-    <Text style={styles.sectionTitle}>NEARBY AMENITIES</Text>
-    {amenities.map((item, index) => (
-      <AmenityItem key={item.id} item={item} index={index} />
-    ))}
+// ─── AMENITY SHIMMER ITEM ────────────────────────────────────
+const AmenityShimmerItem = memo(({ index }: { index: number }) => (
+  <Animated.View entering={FadeInDown.duration(400).delay(400 + index * 120)}>
+    <View style={styles.amenityItem}>
+      <ShimmerBlock width={40} height={40} style={{ borderRadius: 12, marginRight: 14 }} />
+      <View style={{ flex: 1 }}>
+        <ShimmerBlock width={100} height={16} style={{ borderRadius: 6, marginBottom: 6 }} />
+        <ShimmerBlock width={70} height={12} style={{ borderRadius: 4 }} />
+      </View>
+      <ShimmerBlock width={20} height={20} style={{ borderRadius: 4 }} />
+    </View>
   </Animated.View>
 ));
+
+// ─── AMENITIES LIST ──────────────────────────────────────────
+const AmenitiesList = memo(({ 
+  amenitiesData, 
+  isLoading, 
+  isError,
+  stationLat,
+  stationLng,
+}: { 
+  amenitiesData?: AmenitiesAPIResponse; 
+  isLoading: boolean; 
+  isError: boolean;
+  stationLat?: number | null;
+  stationLng?: number | null;
+}) => {
+  const navigation = useNavigation<any>();
+
+  // Build dynamic amenity items from API data
+  const amenityItems: Amenity[] = useMemo(() => {
+    const hospitals = amenitiesData?.data?.hospitals ?? [];
+    const hotels = amenitiesData?.data?.hotels ?? [];
+
+    return [
+      {
+        id: '1',
+        label: 'Hospitals',
+        icon: 'local-hospital',
+        count: hospitals.length,
+        emptyText: 'No hospitals found nearby',
+      },
+      {
+        id: '2',
+        label: 'Hotels',
+        icon: 'hotel',
+        count: hotels.length,
+        emptyText: 'No hotels found nearby',
+      },
+    ];
+  }, [amenitiesData]);
+
+  const navigateToList = useCallback((type: 'hospital' | 'hotel') => {
+    if (!stationLat || !stationLng) return;
+    navigation.navigate('AmenitiesList', {
+      type,
+      stationLat,
+      stationLng,
+    });
+  }, [navigation, stationLat, stationLng]);
+
+  return (
+    <Animated.View entering={FadeInDown.duration(500).delay(350)} style={styles.amenitiesSection}>
+      <Text style={styles.sectionTitle}>NEARBY AMENITIES</Text>
+
+      {/* Loading state — shimmer cards */}
+      {isLoading ? (
+        <>
+          <AmenityShimmerItem index={0} />
+          <AmenityShimmerItem index={1} />
+        </>
+      ) : isError ? (
+        /* Error state — keep layout stable */
+        <View style={styles.amenityFallback}>
+          <MaterialCommunityIcons name="wifi-off" size={20} color={COLORS.mutedSlate} />
+          <Text style={styles.amenityFallbackText}>Unable to load amenities. Try again later.</Text>
+        </View>
+      ) : (
+        /* Data state */
+        amenityItems.map((item, index) => (
+          <AmenityItem
+            key={item.id}
+            item={item}
+            index={index}
+            onPress={() => navigateToList(item.icon === 'local-hospital' ? 'hospital' : 'hotel')}
+          />
+        ))
+      )}
+    </Animated.View>
+  );
+});
 
 // ─── PROXIMITY ALERT CARD ────────────────────────────────────
 const ProximityAlertCard = memo(() => {
@@ -521,7 +605,20 @@ export default function JourneyScreen() {
     arrivalTimezone: 'IST',
   }), [data?.trainNumber, data?.trainName, data?.currentSpeed, data?.arrivalTime]);
 
-  const amenities = DEFAULT_AMENITIES; // Static for now, can be wired to /api/v1/amenities later
+  // ── Amenities Query (uses currentStation lat/lng) ─────────
+  const currentLat = data?.currentStation?.lat;
+  const currentLng = data?.currentStation?.lng;
+
+  const {
+    data: amenitiesData,
+    isLoading: amenitiesLoading,
+    isError: amenitiesError,
+  } = useQuery<AmenitiesAPIResponse>({
+    queryKey: ['amenities', currentLat, currentLng],
+    queryFn: () => fetchAmenities(currentLat!, currentLng!),
+    enabled: !!currentLat && !!currentLng,
+    staleTime: 1000 * 60 * 60, // 1 hour — amenities don't change often
+  });
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
@@ -550,7 +647,13 @@ export default function JourneyScreen() {
               distanceKm={distanceKm}
               isLoading={isLoading}
             />
-            <AmenitiesList amenities={amenities} />
+            <AmenitiesList
+              amenitiesData={amenitiesData}
+              isLoading={amenitiesLoading}
+              isError={amenitiesError}
+              stationLat={currentLat}
+              stationLng={currentLng}
+            />
             <ProximityAlertCard />
             <TrainStatusCard train={trainData} isLoading={isLoading} />
           </>
@@ -791,10 +894,38 @@ const styles = StyleSheet.create({
     marginRight: 14,
   },
   amenityLabel: {
-    flex: 1,
     fontSize: 15,
     fontWeight: '700',
     color: COLORS.mediumGray,
+  },
+  amenityCount: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: COLORS.mutedSlate,
+    marginTop: 2,
+  },
+  amenityEmpty: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: COLORS.mutedSlate,
+    fontStyle: 'italic',
+    marginTop: 2,
+  },
+  amenityFallback: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.surfaceGray,
+    borderRadius: 16,
+    paddingVertical: 20,
+    paddingHorizontal: 16,
+    gap: 10,
+  },
+  amenityFallbackText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '600',
+    color: COLORS.mutedSlate,
+    lineHeight: 18,
   },
 
   // Proximity Alert

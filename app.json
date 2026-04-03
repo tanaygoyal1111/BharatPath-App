@@ -13,7 +13,12 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.anonymous.BharatPath"
+      "bundleIdentifier": "com.anonymous.BharatPath",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "We use your location to track your train journey and provide live updates.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "We use your location to enable proximity alerts during your journey.",
+        "LSApplicationQueriesSchemes": ["comgooglemaps"]
+      }
     },
     "android": {
       "adaptiveIcon": {

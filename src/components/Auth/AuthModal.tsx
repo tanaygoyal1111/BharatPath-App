@@ -45,6 +45,7 @@ export default function AuthModal({ visible, onClose, onSuccess }: AuthModalProp
 
   // Error State Handling
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [showSuccess, setShowSuccess] = useState(false);
 
   // Validate Email Live
   useEffect(() => {
@@ -60,32 +61,57 @@ export default function AuthModal({ visible, onClose, onSuccess }: AuthModalProp
        setOtp(['', '', '', '', '', '']);
        setResendTimer(0);
        setErrorMsg(null);
+       setShowSuccess(false);
     }
+    // Hard reset on modal close/unmount
+    return () => {
+      setResendTimer(0);
+      setIsSending(false);
+    };
   }, [visible]);
 
   useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (resendTimer > 0) {
-      interval = setInterval(() => {
-        setResendTimer(prev => prev - 1);
-      }, 1000);
-    }
+    if (resendTimer === 0) return;
+
+    const interval = setInterval(() => {
+      setResendTimer(prev => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
     return () => clearInterval(interval);
-  }, [resendTimer]);
+  }, [resendTimer > 0]);
 
   const handleSendOTP = async () => {
+    // 🔒 HARD LOCK Guard
+    if (isSending || (!visible)) return;
+    if (view === 'OTP' && resendTimer > 0) return;
     if (!isEmailValid) return;
+
     setIsSending(true);
     setErrorMsg(null);
+    setShowSuccess(false);
     try {
       const { error } = await supabase.auth.signInWithOtp({ email });
       if (error) throw error;
 
       setView('OTP');
-      setResendTimer(30);
+      setResendTimer(30); // 🧠 Single Source of Truth: restart ONLY once after success
+      setShowSuccess(true);
       setOtp(['', '', '', '', '', '']); 
     } catch (err: any) { 
-      setErrorMsg(err.message || 'Failed to send OTP.');
+      const msg = err.message || 'Failed to send OTP.';
+      setErrorMsg(msg);
+      
+      // 🎯 Sync UI timer with Supabase rate limit error
+      const match = msg.match(/after (\d+) seconds/i);
+      if (match && match[1]) {
+        setResendTimer(parseInt(match[1], 10));
+      }
     } finally {
       setIsSending(false);
     }
@@ -187,10 +213,12 @@ export default function AuthModal({ visible, onClose, onSuccess }: AuthModalProp
         <View style={{ width: 32 }} />
       </View>
 
-      <View style={styles.successBanner}>
-         <Feather name="check-circle" size={16} color={COLORS.successText} />
-         <Text style={styles.successBannerText}>OTP sent successfully</Text>
-      </View>
+      {showSuccess && (
+        <View style={styles.successBanner}>
+           <Feather name="check-circle" size={16} color={COLORS.successText} />
+           <Text style={styles.successBannerText}>OTP sent successfully</Text>
+        </View>
+      )}
 
       <View style={styles.otpIntro}>
          <Text style={styles.otpTitle}>Enter</Text>
@@ -226,14 +254,21 @@ export default function AuthModal({ visible, onClose, onSuccess }: AuthModalProp
       />
 
       <View style={styles.resendSection}>
-         <TouchableOpacity onPress={() => { if(resendTimer === 0) handleSendOTP() }} disabled={resendTimer > 0} style={{ alignItems: 'center' }}>
-            <Text style={[styles.resendBtnText, resendTimer > 0 && { color: COLORS.textMuted }]}>
-               RESEND OTP
+         <TouchableOpacity 
+           onPress={handleSendOTP} 
+           disabled={resendTimer > 0 || isSending} 
+           style={{ alignItems: 'center' }}
+         >
+            <Text style={[
+              styles.resendBtnText, 
+              (resendTimer > 0 || isSending) && { color: COLORS.textMuted }
+            ]}>
+               {isSending ? "SENDING..." : resendTimer > 0 ? `RESEND IN ${resendTimer}s` : "RESEND OTP"}
             </Text>
-            {resendTimer > 0 ? (
+            {(resendTimer > 0 && !isSending) ? (
               <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
                  <Feather name="clock" size={12} color={COLORS.textMuted} />
-                 <Text style={styles.resendTimerText}> RESEND IN 00:{resendTimer.toString().padStart(2, '0')}</Text>
+                 <Text style={styles.resendTimerText}> 00:{resendTimer.toString().padStart(2, '0')}</Text>
               </View>
             ) : null}
          </TouchableOpacity>

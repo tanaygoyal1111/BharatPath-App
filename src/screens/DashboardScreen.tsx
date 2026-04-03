@@ -1,5 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback, memo } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Dimensions, StatusBar, Platform, Modal, ActivityIndicator, TextInput, Alert, Animated as RNAnimated } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Dimensions, StatusBar, Platform, Modal, ActivityIndicator, TextInput, Alert, Animated as RNAnimated, Switch } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Notifications from 'expo-notifications';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -42,6 +44,32 @@ export default function Dashboard() {
 
   // Auth State for gatekeeping
   const [showAuthModal, setShowAuthModal] = useState(false);
+
+  // Proximity Alert State
+  const [isProximityEnabled, setIsProximityEnabled] = useState(false);
+
+  useEffect(() => {
+    AsyncStorage.getItem('proximity_enabled').then(val => {
+      if (val) setIsProximityEnabled(JSON.parse(val));
+    });
+  }, []);
+
+  const handleToggleProximity = async (value: boolean) => {
+    if (!activeJourney) return; // Guard: Never allow toggle without a journey
+
+    if (value) {
+      const { status } = await Notifications.getPermissionsAsync();
+      if (status !== 'granted') {
+        const { status: newStatus } = await Notifications.requestPermissionsAsync();
+        if (newStatus !== 'granted') {
+          Alert.alert("Permission required", "Enable notifications to use proximity alerts.");
+          return;
+        }
+      }
+    }
+    setIsProximityEnabled(value);
+    await AsyncStorage.setItem('proximity_enabled', JSON.stringify(value));
+  };
 
   // Active Journey State
   const [activeJourney, setActiveJourney] = useState<JourneyData | null>(null);
@@ -196,6 +224,9 @@ export default function Dashboard() {
               <OnlineUtilitiesSection 
                 onExchangePress={handleSeatExchangePress} 
                 onConnectingPress={() => navigation.navigate('ConnectingJourney')}
+                isProximityEnabled={isProximityEnabled}
+                onToggleProximity={handleToggleProximity}
+                hasJourney={!!activeJourney}
               />
             </ScrollView>
           )}
@@ -751,7 +782,19 @@ const OnlineActiveJourneyCard = memo(({ data, onClear, onRefresh, status }: { da
   );
 });
 
-const OnlineUtilitiesSection = ({ onExchangePress, onConnectingPress }: { onExchangePress: () => void, onConnectingPress: () => void }) => (
+const OnlineUtilitiesSection = ({ 
+  onExchangePress, 
+  onConnectingPress,
+  isProximityEnabled,
+  onToggleProximity,
+  hasJourney
+}: { 
+  onExchangePress: () => void, 
+  onConnectingPress: () => void,
+  isProximityEnabled: boolean,
+  onToggleProximity: (val: boolean) => void,
+  hasJourney: boolean
+}) => (
   <View style={styles.sectionContainer}>
     <Text style={styles.sectionTitle}>TRAVEL UTILITIES</Text>
     <View style={styles.utilitiesGrid}>
@@ -778,7 +821,7 @@ const OnlineUtilitiesSection = ({ onExchangePress, onConnectingPress }: { onExch
         </View>
       </TouchableOpacity>
     </View>
-    <TouchableOpacity style={styles.utilityRect}>
+    <View style={styles.utilityRect}>
       <View style={styles.rectContentFull}>
         <View style={styles.rectContent}>
           <View style={[styles.iconBox3D, { backgroundColor: '#FFF3E0' }]}>
@@ -787,11 +830,26 @@ const OnlineUtilitiesSection = ({ onExchangePress, onConnectingPress }: { onExch
               <MaterialCommunityIcons name="radar" size={14} color={COLORS.white} />
             </View>
           </View>
-          <Text style={[styles.utilityTitle, {marginLeft: 16}]}>Proximity Alerts</Text>
+          <View style={{ marginLeft: 16 }}>
+            <Text style={styles.utilityTitle}>Proximity Alerts</Text>
+            <Text style={{ fontSize: 11, color: COLORS.textGray, marginTop: 2 }}>
+              {!hasJourney 
+                ? 'Requires active journey' 
+                : isProximityEnabled 
+                  ? 'Alerts enabled' 
+                  : 'Alerts disabled'}
+            </Text>
+          </View>
         </View>
-        <Ionicons name="chevron-forward" size={20} color={COLORS.textLightGray} />
+        <Switch 
+          value={isProximityEnabled} 
+          onValueChange={onToggleProximity} 
+          trackColor={{ false: '#767577', true: '#22C55E' }}
+          thumbColor={isProximityEnabled ? '#fff' : '#f4f3f4'}
+          disabled={!hasJourney}
+        />
       </View>
-    </TouchableOpacity>
+    </View>
   </View>
 );
 

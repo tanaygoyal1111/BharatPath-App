@@ -11,6 +11,7 @@ import LiveStatusScreen from '../screens/LiveStatusScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import AuthScreen from '../screens/AuthScreen';
 import JourneyScreen from '../screens/JourneyScreen';
+import AmenitiesListScreen from '../screens/AmenitiesListScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -27,6 +28,7 @@ export default function AppNavigator() {
       <Stack.Screen name="Journey" component={JourneyScreen} />
       <Stack.Screen name="Profile" component={ProfileScreen} />
       <Stack.Screen name="Auth" component={AuthScreen} />
+      <Stack.Screen name="AmenitiesList" component={AmenitiesListScreen} />
     </Stack.Navigator>
   );
 }

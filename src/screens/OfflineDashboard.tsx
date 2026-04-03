@@ -1,5 +1,7 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, ImageBackground, Dimensions, ActivityIndicator } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, ImageBackground, Dimensions, ActivityIndicator, Switch, Alert } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Notifications from 'expo-notifications';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useJourneyData } from '../hooks/useJourneyData';
@@ -29,6 +31,32 @@ export default function OfflineDashboard({ onHelpPress }: { onHelpPress?: () => 
   const navigation = useNavigation<any>();
   const { data, isLoading } = useJourneyData(true); // Always offline in this dashboard
 
+  // Proximity Alert State
+  const [isProximityEnabled, setIsProximityEnabled] = useState(false);
+
+  useEffect(() => {
+    AsyncStorage.getItem('proximity_enabled').then(val => {
+      if (val) setIsProximityEnabled(JSON.parse(val));
+    });
+  }, []);
+
+  const handleToggleProximity = async (value: boolean) => {
+    if (!data) return; // Guard: Never allow toggle without a journey
+
+    if (value) {
+      const { status } = await Notifications.getPermissionsAsync();
+      if (status !== 'granted') {
+        const { status: newStatus } = await Notifications.requestPermissionsAsync();
+        if (newStatus !== 'granted') {
+          Alert.alert("Permission required", "Enable notifications to use proximity alerts.");
+          return;
+        }
+      }
+    }
+    setIsProximityEnabled(value);
+    await AsyncStorage.setItem('proximity_enabled', JSON.stringify(value));
+  };
+
   if (isLoading) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', marginTop: 100 }}>
@@ -40,7 +68,13 @@ export default function OfflineDashboard({ onHelpPress }: { onHelpPress?: () => 
   return (
     <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
       <BoardedCard data={data} />
-      <OfflineUtilities onHelpPress={onHelpPress} navigation={navigation} />
+      <OfflineUtilities 
+        onHelpPress={onHelpPress} 
+        navigation={navigation}
+        isProximityEnabled={isProximityEnabled}
+        onToggleProximity={handleToggleProximity}
+        hasJourney={!!data}
+      />
       <NextHaltBanner data={data} />
     </ScrollView>
   );
@@ -91,11 +125,23 @@ const BoardedCard = ({ data }: { data: any }) => (
   </View>
 );
 
-const OfflineUtilities = ({ onHelpPress, navigation }: { onHelpPress?: () => void, navigation: any }) => (
+const OfflineUtilities = ({ 
+  onHelpPress, 
+  navigation,
+  isProximityEnabled,
+  onToggleProximity,
+  hasJourney
+}: { 
+  onHelpPress?: () => void, 
+  navigation: any,
+  isProximityEnabled: boolean,
+  onToggleProximity: (val: boolean) => void,
+  hasJourney: boolean
+}) => (
   <View style={styles.offlineUtilsContainer}>
     {/* Active Offline Utilities */}
     <View style={styles.offlineRow}>
-      <TouchableOpacity style={[styles.offlineUtilitySquare, styles.utilBlueBorder]}>
+      <View style={[styles.offlineUtilitySquare, styles.utilBlueBorder]}>
         <View style={[styles.iconBox3D, { backgroundColor: '#FFF3E0' }]}>
           <MaterialCommunityIcons name="bell-ring" size={28} color={COLORS.warning} />
           <View style={[styles.iconBadge, { backgroundColor: COLORS.primary }]}>
@@ -104,9 +150,21 @@ const OfflineUtilities = ({ onHelpPress, navigation }: { onHelpPress?: () => voi
         </View>
         <View style={styles.utilityTextWrap}>
           <Text style={styles.offlineUtilTitle}>PROXIMITY ALERTS</Text>
-          <Text style={styles.offlineUtilDesc}>Wake up 10km before station</Text>
+          <Text style={styles.offlineUtilDesc}>
+            {!hasJourney ? 'Requires active journey' : isProximityEnabled ? 'Alerts enabled' : 'Alerts disabled'}
+          </Text>
+          <View style={{ marginTop: 8, alignItems: 'flex-start' }}>
+            <Switch 
+              value={isProximityEnabled} 
+              onValueChange={onToggleProximity} 
+              trackColor={{ false: '#767577', true: '#22C55E' }}
+              thumbColor={isProximityEnabled ? '#fff' : '#f4f3f4'}
+              disabled={!hasJourney}
+              style={{ transform: [{ scale: 0.8 }], marginLeft: -4 }}
+            />
+          </View>
         </View>
-      </TouchableOpacity>
+      </View>
 
       <TouchableOpacity style={[styles.offlineUtilitySquare, styles.utilOrangeBorder]} onPress={onHelpPress}>
         <View style={[styles.iconBox3D, { backgroundColor: COLORS.bgComplaint }]}>

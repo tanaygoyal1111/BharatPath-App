@@ -4,48 +4,43 @@ import { supabase } from '../lib/supabase';
 /**
  * Journey API response shape (matches backend journeyProvider contract)
  */
-export interface JourneyAPIData {
-  pnr: string;
-  trainNumber: string;
-  trainName: string;
-  status: string;
-  currentSpeed: number;
-  delayInMinutes: number;
+export interface JourneyStation {
+  name: string;
+  lat: number;
+  lng: number;
+  distance: number; // cumulative distance from source in km
+  time: string;
   platform: string;
-  journeyDate: string;
-  departureTime: string;
-  arrivalTime: string;
-  currentStation: {
-    code: string;
-    name: string;
-    lat: number | null;
-    lng: number | null;
+}
+
+export interface JourneyAPIData {
+  pnr?: string;
+  trainName: string;
+  trainNumber?: string;
+  startTime: number;
+  endTime: number;
+  stations: JourneyStation[];
+}
+
+/**
+ * Amenity item returned by the backend (Overpass-sourced)
+ */
+export interface AmenityAPIItem {
+  name: string;
+  lat: number;
+  lng?: number;
+  lon?: number;
+}
+
+/**
+ * Amenities API response shape
+ */
+export interface AmenitiesAPIResponse {
+  success: boolean;
+  data: {
+    hospitals: AmenityAPIItem[];
+    hotels: AmenityAPIItem[];
   };
-  nextStation: {
-    code: string;
-    name: string;
-    lat: number | null;
-    lng: number | null;
-    distanceKm: number;
-    eta: string;
-  };
-  destination: {
-    code: string;
-    name: string;
-    lat: number | null;
-    lng: number | null;
-  };
-  distanceToDestination: number;
-  routeStations: Array<{
-    code: string;
-    name: string;
-    lat: number | null;
-    lng: number | null;
-    status: string;
-  }>;
-  source?: string;
-  fallback?: boolean;
-  message?: string;
 }
 
 /**
@@ -66,4 +61,18 @@ export const fetchJourneyData = async (pnr: string): Promise<JourneyAPIData> => 
   }
 
   return response.data.data;
+};
+
+/**
+ * Fetch nearby amenities (hospitals & hotels) from the backend.
+ * POST /api/v1/amenities — Public endpoint, no auth required.
+ */
+export const fetchAmenities = async (lat: number, lng: number): Promise<AmenitiesAPIResponse> => {
+  const response = await apiClient.post('amenities', { lat, lng });
+
+  if (!response.data?.success) {
+    throw new Error('Failed to fetch nearby amenities');
+  }
+
+  return response.data;
 };
