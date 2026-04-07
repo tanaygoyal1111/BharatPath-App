@@ -281,7 +281,7 @@ function SearchHubCard({ activeJourney, onJourneyUpdate }: { activeJourney: Jour
       setPnrInput('');
     },
     (err) => {
-      Alert.alert('PNR Error', err.message || 'Unable to fetch PNR status.');
+      // Handled silently by inline UI banner
     }
   );
 
@@ -476,8 +476,14 @@ function SearchHubCard({ activeJourney, onJourneyUpdate }: { activeJourney: Jour
                   onChangeText={setPnrInput}
                 />
               </View>
+              {pnrMutation.isError && (
+                <View style={{ backgroundColor: '#FFEBEE', padding: 12, borderRadius: 8, marginTop: 12, flexDirection: 'row', alignItems: 'center' }}>
+                  <MaterialIcons name="error-outline" size={16} color={COLORS.alertRed} style={{ marginRight: 8 }} />
+                  <Text style={{ color: COLORS.alertRed, fontSize: 12, fontWeight: '600', flex: 1 }}>{pnrMutation.error?.message}</Text>
+                </View>
+              )}
               <TouchableOpacity 
-                style={[styles.searchButton, pnrMutation.isPending && { opacity: 0.7 }]}
+                style={[styles.searchButton, pnrMutation.isPending && { opacity: 0.7 }, { marginTop: pnrMutation.isError ? 12 : 16 }]}
                 onPress={handleCheckPnr}
                 disabled={pnrMutation.isPending}
               >

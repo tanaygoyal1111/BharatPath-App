@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import apiClient from '../api/client';
 
 interface TrainSearchParams {
@@ -24,11 +25,19 @@ export const useTrainSearch = (params: TrainSearchParams) => {
   return useQuery({
     queryKey: ['trainSearch', from, to, date],
     queryFn: async () => {
-      const response = await apiClient.get('trains/search', {
-        params: { from, to, date },
-      });
-      // Handle the server's response wrapper: { success, data, count, error }
-      return response.data.data as Train[];
+      try {
+        const response = await apiClient.get(`/trains/search?from=${from}&to=${to}&date=${date}`);
+        const trainData = response.data.data as Train[];
+        
+        await AsyncStorage.setItem(`train_cache_${from}_${to}`, JSON.stringify(trainData));
+        return trainData;
+      } catch (error) {
+        const cachedData = await AsyncStorage.getItem(`train_cache_${from}_${to}`);
+        if (cachedData) {
+          return JSON.parse(cachedData) as Train[];
+        }
+        throw error;
+      }
     },
     // Only enable query if all parameters are provided
     enabled: !!from && !!to && !!date,

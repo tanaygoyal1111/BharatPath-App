@@ -38,6 +38,14 @@ export default function ConnectingJourneyScreen() {
   const [activeInput, setActiveInput] = useState<'from' | 'to' | null>(null);
   const [showCalendar, setShowCalendar] = useState(false);
   const [selectedCalendarDate, setSelectedCalendarDate] = useState(new Date());
+
+  // NEW: State for sorting and filtering
+  const [displayedCount, setDisplayedCount] = useState(10);
+  const [activeSort, setActiveSort] = useState<'FASTEST' | 'CHEAPEST' | 'FEWEST STOPS'>('FASTEST');
+  const [showFilterModal, setShowFilterModal] = useState(false);
+  const [layoverPref, setLayoverPref] = useState<'No Preference' | 'Shortest' | 'Minimize Connections'>('No Preference');
+  const [minLayover, setMinLayover] = useState('');
+  const [maxLayover, setMaxLayover] = useState('');
   
   const ALL_STATIONS = useMemo(() => Object.keys(masterMap), []);
 
@@ -58,22 +66,71 @@ export default function ConnectingJourneyScreen() {
     setIsModifying(!isModifying);
   };
 
-  const handleUpdate = () => {
+  // NEW: Refactored to async to handle the Promise returned by the algorithm
+  const handleUpdate = async () => {
     setIsSearchingLoading(true);
-    // Simulate realistic processing time for algorithm demo
-    setTimeout(() => {
-      const results = findConnectingRoutes(fromStation.toUpperCase(), toStation.toUpperCase());
-      LayoutAnimation.configureNext(LayoutAnimation.Presets.spring);
-      setJourneyResults(results);
-      setIsSearchingLoading(false);
-      setIsModifying(false);
-      setResultsLoaded(true);
-    }, 800);
+    
+    // NEW: We await the result natively here without an artificial setTimeout
+    const results = await findConnectingRoutes(fromStation.toUpperCase(), toStation.toUpperCase());
+    
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.spring);
+    setJourneyResults(results);
+    setDisplayedCount(10); // NEW: Reset displayed count on new search
+    setIsSearchingLoading(false);
+    setIsModifying(false);
+    setResultsLoaded(true);
   };
 
   useEffect(() => {
     handleUpdate();
   }, []);
+
+  // NEW: Smart Sorting and Filtering Logic
+  const sortedAndFilteredResults = useMemo(() => {
+    let res = [...journeyResults];
+
+    // Filter by min/max layover if provided
+    const minL = parseInt(minLayover);
+    const maxL = parseInt(maxLayover);
+    
+    if (!isNaN(minL) || !isNaN(maxL)) {
+       res = res.filter(r => {
+          if (r.layoverDuration === undefined) return true; // Keep direct flights
+          const duration = r.layoverDuration;
+          if (!isNaN(minL) && duration < minL) return false;
+          if (!isNaN(maxL) && duration > maxL) return false;
+          return true;
+       });
+    }
+
+    // NEW FIX: Combined Tie-breaker Logic
+    res.sort((a, b) => {
+      // 1. Primary Sort
+      let diff = 0;
+      if (activeSort === 'FASTEST' || activeSort === 'CHEAPEST') {
+        diff = a.totalDuration - b.totalDuration;
+      } else if (activeSort === 'FEWEST STOPS') {
+        diff = a.legs.length - b.legs.length;
+      }
+      
+      // 2. If not tied, return primary diff
+      if (diff !== 0) return diff;
+      
+      // 3. Secondary Sort (Tie-breaker based on Layover Preferences)
+      if (layoverPref === 'Shortest') {
+        return (a.layoverDuration || 0) - (b.layoverDuration || 0);
+      } else if (layoverPref === 'Minimize Connections') {
+        return a.legs.length - b.legs.length;
+      }
+      
+      return 0; 
+    });
+    
+    return res;
+  }, [journeyResults, activeSort, layoverPref, minLayover, maxLayover]);
+
+  // NEW: Expose only sliced window of results
+  const visibleResults = sortedAndFilteredResults.slice(0, displayedCount);
 
   return (
     <View style={styles.container}>
@@ -198,44 +255,81 @@ export default function ConnectingJourneyScreen() {
            )}
         </View>
 
+        {/* NEW: Visible Filtering/Sorting Controls */}
+        {journeyResults.length > 0 && !isModifying && (
+          <View style={styles.filtersContainer}>
+             <View style={styles.sortRow}>
+                <Text style={styles.sortLabel}>Sort By:</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipsScroll}>
+                   {['FASTEST', 'CHEAPEST', 'FEWEST STOPS'].map(sortOpt => (
+                     <TouchableOpacity 
+                       key={sortOpt} 
+                       onPress={() => setActiveSort(sortOpt as any)}
+                       style={[styles.chipBase, activeSort === sortOpt && styles.chipActive]}
+                     >
+                       <Text style={[styles.chipText, activeSort === sortOpt && styles.chipTextActive]}>{sortOpt}</Text>
+                     </TouchableOpacity>
+                   ))}
+                </ScrollView>
+                <TouchableOpacity onPress={() => setShowFilterModal(true)} style={styles.filterMenuBtn}>
+                   <Feather name="filter" size={16} color={COLORS.primary} />
+                </TouchableOpacity>
+             </View>
+          </View>
+        )}
+
         <View style={styles.sectionHeader}>
-           <Text style={styles.sectionSubtitle}>RESULTS FOUND</Text>
-           <Text style={styles.sectionTitle}>{journeyResults.length.toString().padStart(2, '0')} CONNECTING JOURNEYS</Text>
+           <Text style={styles.sectionSubtitle}>CONNECTING JOURNEYS</Text>
+           {/* NEW: Dynamic text showcasing pagination and matches */}
+           <Text style={styles.sectionTitle}>FOUND {Math.min(displayedCount, sortedAndFilteredResults.length)} TOP MATCHES</Text>
         </View>
 
         <View style={{ paddingHorizontal: 20 }}>
            {journeyResults.length > 0 ? (
-             journeyResults.map((option, idx) => (
-               <JourneyOptionCard 
-                 key={option.id}
-                 option={(idx + 1).toString().padStart(2, '0')}
-                 timeInfo={`${Math.floor(option.totalDuration / 60)}H ${option.totalDuration % 60}M • ${option.legs.length - 1} CONNECTION`}
-                 isFastest={idx === 0}
-                 legs={option.legs.reduce((acc: any[], leg, i) => {
-                   acc.push({
-                     dep: leg.depTime,
-                     from: leg.fromCode,
-                     arr: leg.arrTime,
-                     to: leg.toCode,
-                     train: `${leg.trainName} (${leg.trainNo})`,
-                     status: 'SCHEDULED'
-                   });
-                   
-                   // Add layover pill between legs
-                   if (i === 0 && option.layoverDuration) {
-                     const h = Math.floor(option.layoverDuration / 60);
-                     const m = option.layoverDuration % 60;
-                     const layoverStr = h > 0 ? `${h}H ${m}M` : `${m}M`;
+             <View>
+               {/* NEW: Render the limited visibleResults array instead of entire array */}
+               {visibleResults.map((option, idx) => (
+                 <JourneyOptionCard 
+                   key={option.id}
+                   option={(idx + 1).toString().padStart(2, '0')}
+                   timeInfo={`${Math.floor(option.totalDuration / 60)}H ${option.totalDuration % 60}M • ${option.legs.length - 1} CONNECTION`}
+                   isFastest={idx === 0 && activeSort === 'FASTEST'}
+                   legs={option.legs.reduce((acc: any[], leg, i) => {
                      acc.push({
-                       layover: `${layoverStr} LAYOVER AT ${leg.toCode}`
+                       dep: leg.depTime,
+                       from: leg.fromCode,
+                       arr: leg.arrTime,
+                       to: leg.toCode,
+                       train: `${leg.trainName} (${leg.trainNo})`,
+                       status: 'SCHEDULED'
                      });
-                   }
-                   return acc;
-                 }, [])}
-                 fare={`₹${Math.floor(600 + Math.random() * 1500)}`} // Simulated fare
-                 platform={`PF ${Math.floor(Math.random() * 12) + 1} → PF ${Math.floor(Math.random() * 12) + 1}`}
-               />
-             ))
+                     
+                     // Add layover pill between legs
+                     if (i === 0 && option.layoverDuration) {
+                       const h = Math.floor(option.layoverDuration / 60);
+                       const m = option.layoverDuration % 60;
+                       const layoverStr = h > 0 ? `${h}H ${m}M` : `${m}M`;
+                       acc.push({
+                         layover: `${layoverStr} LAYOVER AT ${leg.toCode}`
+                       });
+                     }
+                     return acc;
+                   }, [])}
+                   fare={`₹${Math.floor(600 + Math.random() * 1500)}`} // Simulated fare
+                   platform={`PF ${Math.floor(Math.random() * 12) + 1} → PF ${Math.floor(Math.random() * 12) + 1}`}
+                 />
+               ))}
+
+               {/* NEW: Expand results action button */}
+               {displayedCount < sortedAndFilteredResults.length && (
+                 <TouchableOpacity 
+                   style={styles.showMoreBtn}
+                   onPress={() => setDisplayedCount(prev => prev + 10)}
+                 >
+                    <Text style={styles.showMoreBtnText}>SHOW MORE RESULTS</Text>
+                 </TouchableOpacity>
+               )}
+             </View>
            ) : (
              <View style={styles.emptyState}>
                 <Ionicons name="search-outline" size={48} color={COLORS.placeholder} />
@@ -245,6 +339,65 @@ export default function ConnectingJourneyScreen() {
            )}
         </View>
       </ScrollView>
+
+      {/* NEW: Detailed Preferences Filtering Modal */}
+      <Modal visible={showFilterModal} transparent animationType="slide">
+        <View style={styles.sheetOverlay}>
+          <View style={styles.bottomSheet}>
+             <View style={styles.sheetHeader}>
+               <Text style={styles.sheetTitle}>Detailed Preferences</Text>
+               <TouchableOpacity onPress={() => setShowFilterModal(false)}>
+                 <Feather name="x" size={24} color={COLORS.secondary} />
+               </TouchableOpacity>
+             </View>
+             
+             <Text style={styles.prefSectionLabel}>LAYOVER PREFERENCE</Text>
+             <View style={styles.radioGroup}>
+               {['No Preference', 'Shortest', 'Minimize Connections'].map(opt => (
+                 <TouchableOpacity 
+                   key={opt}
+                   style={styles.radioRow}
+                   onPress={() => setLayoverPref(opt as any)}
+                 >
+                   <View style={[styles.radioOuter, layoverPref === opt && styles.radioOuterActive]}>
+                      {layoverPref === opt && <View style={styles.radioInner} />}
+                   </View>
+                   <Text style={styles.radioLabel}>{opt}</Text>
+                 </TouchableOpacity>
+               ))}
+             </View>
+
+             <Text style={styles.prefSectionLabel}>LAYOVER DURATION (MINUTES)</Text>
+             <View style={styles.durationInputRow}>
+                <View style={[styles.inputWrapper, { flex: 1, paddingVertical: 10 }]}>
+                   <TextInput 
+                     style={styles.fieldInput} 
+                     placeholder="Min time"
+                     keyboardType="numeric"
+                     value={minLayover}
+                     onChangeText={setMinLayover}
+                     placeholderTextColor={COLORS.placeholder}
+                   />
+                </View>
+                <Text style={{ marginHorizontal: 15, color: COLORS.secondary, fontWeight: '800' }}>-</Text>
+                <View style={[styles.inputWrapper, { flex: 1, paddingVertical: 10 }]}>
+                   <TextInput 
+                     style={styles.fieldInput} 
+                     placeholder="Max time"
+                     keyboardType="numeric"
+                     value={maxLayover}
+                     onChangeText={setMaxLayover}
+                     placeholderTextColor={COLORS.placeholder}
+                   />
+                </View>
+             </View>
+
+             <TouchableOpacity style={styles.applyFilterBtn} onPress={() => { setDisplayedCount(10); setShowFilterModal(false); }}>
+                <Text style={styles.applyFilterBtnText}>APPLY FILTERS</Text>
+             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={showCalendar} transparent animationType="fade">
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowCalendar(false)}>
@@ -367,7 +520,7 @@ const styles = StyleSheet.create({
   headerTitle: { color: COLORS.white, fontSize: 14, fontWeight: '800', letterSpacing: 1 },
   headerRight: { padding: 8, marginRight: -8 },
 
-  searchHubCard: { backgroundColor: 'white', marginTop: 20, marginHorizontal: 20, marginBottom: 25, borderRadius: 24, padding: 24, elevation: 4, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10 },
+  searchHubCard: { backgroundColor: 'white', marginTop: 20, marginHorizontal: 20, marginBottom: 15, borderRadius: 24, padding: 24, elevation: 4, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10 },
   hubLabel: { fontSize: 10, color: COLORS.secondary, fontWeight: '800', letterSpacing: 1, marginBottom: 6 },
   hubSummary: { fontSize: 18, fontWeight: '900', color: COLORS.primary, lineHeight: 26, marginBottom: 20 },
   modifyBtn: { backgroundColor: COLORS.primary, borderRadius: 16, paddingVertical: 14, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' },
@@ -383,6 +536,35 @@ const styles = StyleSheet.create({
   cancelHubText: { color: COLORS.secondary, fontWeight: '800', fontSize: 13 },
   updateHubBtn: { flex: 2, backgroundColor: COLORS.primary, borderRadius: 12, paddingVertical: 16, alignItems: 'center' },
   updateHubText: { color: 'white', fontWeight: '900', fontSize: 13 },
+
+  // NEW: Filter Styles
+  filtersContainer: { paddingHorizontal: 20, marginBottom: 15 },
+  sortRow: { flexDirection: 'row', alignItems: 'center' },
+  sortLabel: { fontSize: 11, fontWeight: '800', color: COLORS.secondary, marginRight: 10 },
+  chipsScroll: { flex: 1 },
+  chipBase: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16, backgroundColor: '#E2E8F0', marginRight: 8 },
+  chipActive: { backgroundColor: COLORS.primary },
+  chipText: { fontSize: 9, fontWeight: '800', color: COLORS.secondary, letterSpacing: 0.5 },
+  chipTextActive: { color: 'white' },
+  filterMenuBtn: { backgroundColor: '#E2E8F0', padding: 8, borderRadius: 12, marginLeft: 10 },
+
+  showMoreBtn: { backgroundColor: 'white', borderWidth: 1, borderColor: COLORS.border, paddingVertical: 16, borderRadius: 16, alignItems: 'center', marginTop: 10, marginBottom: 20 },
+  showMoreBtnText: { color: COLORS.primary, fontWeight: '800', fontSize: 12 },
+
+  sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  bottomSheet: { backgroundColor: 'white', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, shadowColor: '#000', shadowOffset: { width: 0, height: -2 }, shadowOpacity: 0.1, shadowRadius: 10, elevation: 10 },
+  sheetHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },
+  sheetTitle: { fontSize: 18, fontWeight: '900', color: COLORS.primary },
+  prefSectionLabel: { fontSize: 10, fontWeight: '800', color: COLORS.secondary, letterSpacing: 1, marginBottom: 12 },
+  radioGroup: { marginBottom: 24 },
+  radioRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
+  radioOuter: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: COLORS.placeholder, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+  radioOuterActive: { borderColor: COLORS.primary },
+  radioInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: COLORS.primary },
+  radioLabel: { fontSize: 14, fontWeight: '600', color: COLORS.primary },
+  durationInputRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 30 },
+  applyFilterBtn: { backgroundColor: COLORS.primary, borderRadius: 16, paddingVertical: 16, alignItems: 'center' },
+  applyFilterBtnText: { color: 'white', fontWeight: '900', fontSize: 14, letterSpacing: 1 },
 
   sectionHeader: { paddingHorizontal: 24, marginBottom: 16 },
   sectionSubtitle: { fontSize: 10, color: COLORS.secondary, fontWeight: '800', letterSpacing: 1, marginBottom: 4 },

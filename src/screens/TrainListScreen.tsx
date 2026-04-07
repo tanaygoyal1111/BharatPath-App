@@ -37,7 +37,7 @@ export default function TrainListScreen() {
     weekday: 'long' 
   }).toUpperCase().replace(/(\d+)\s(\w+)/, '$1 $2,');
 
-  const { data, isLoading, error, refetch } = useTrainSearch({
+  const { data, isLoading, isError, refetch } = useTrainSearch({
     from,
     to,
     date: `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`,
@@ -60,16 +60,17 @@ export default function TrainListScreen() {
   );
 
   const renderEmptyState = () => (
-    <View style={styles.centerContainer}>
+    <View style={styles.centerContainer} className="w-full">
       {isLoading ? (
-        <>
-          <ActivityIndicator size="large" color={COLORS.primary} />
-          <Text style={styles.statusText}>Searching for available trains...</Text>
-        </>
-      ) : error ? (
+        <View className="flex-1 w-full px-4 pt-4">
+          <View className="h-40 bg-[#E0E0E0] rounded-xl mb-4 animate-pulse opacity-60 w-full" />
+          <View className="h-40 bg-[#E0E0E0] rounded-xl mb-4 animate-pulse opacity-40 w-full" />
+          <View className="h-40 bg-[#E0E0E0] rounded-xl mb-4 animate-pulse opacity-20 w-full" />
+        </View>
+      ) : isError && (!data || data.length === 0) ? (
         <>
           <MaterialIcons name="error-outline" size={64} color={COLORS.errorRed} />
-          <Text style={[styles.errorText, { color: COLORS.errorRed }]}>Oops! Failed to fetch trains.</Text>
+          <Text style={[styles.errorText, { color: COLORS.errorRed }]}>Unable to connect to BharatPath servers.</Text>
           <TouchableOpacity style={styles.retryButtonOutline} onPress={() => refetch()}>
             <Text style={styles.retryTextBlue}>RETRY SEARCH</Text>
           </TouchableOpacity>

@@ -35,39 +35,38 @@ export const usePnrStatus = (
         throw new Error('Enter valid 10-digit PNR');
       }
       
-      const response = await apiClient.get(`pnr/${pnr}`);
-      const raw = response.data.data;
-      
-      // Map backend fields to frontend JourneyData precisely
-      const journey: JourneyData = {
-        pnr,
-        trainNo: raw.trainNumber,
-        trainName: raw.trainName,
-        sourceCode: raw.from.code,
-        sourceCity: raw.from.name,
-        destCode: raw.to.code,
-        destCity: raw.to.name,
-        departs: raw.departureTime,
-        arrival: raw.arrivalTime,
-        platform: raw.platform,
-        coach: raw.coach,
-        seat: raw.seat,
-        statusTag: raw.status,
-        subText: raw.subText,
-        currentLocation: raw.currentLocation,
-        eta: raw.eta,
-        progressPct: raw.progressPct,
-      };
-      
-      // Store journey object with metadata in AsyncStorage
-      const storageData = {
-        journey,
-        cachedAt: Date.now()
-      };
-      
-      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(storageData));
-      
-      return journey;
+      try {
+        const response = await apiClient.get(`/pnr/${pnr}`);
+        const journey: JourneyData = response.data.data;
+        
+        // Task 2: Implement Offline Resilience
+        await AsyncStorage.setItem(`pnr_cache_${pnr}`, JSON.stringify(journey));
+        
+        // Store journey object with metadata in AsyncStorage for active tracking
+        const storageData = {
+          journey,
+          cachedAt: Date.now()
+        };
+        await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(storageData));
+        
+        return journey;
+      } catch (error) {
+        // Fallback to offline cache
+        const cachedData = await AsyncStorage.getItem(`pnr_cache_${pnr}`);
+        if (cachedData) {
+          const parsed = JSON.parse(cachedData);
+          
+          // Re-update the active tracking cache as well to match fallback
+          const storageData = {
+            journey: parsed,
+            cachedAt: Date.now()
+          };
+          await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(storageData));
+          
+          return parsed as JourneyData;
+        }
+        throw new Error("Unable to fetch data. Please ensure you entered a valid 10-digit PNR."); // No cache exists, throw to UI
+      }
     },
     onSuccess: (data) => {
       onSuccessCallback?.(data);
@@ -83,9 +82,6 @@ export const getCachedJourney = async (): Promise<JourneyData | null> => {
     const data = await AsyncStorage.getItem(STORAGE_KEY);
     if (!data) return null;
     const parsed = JSON.parse(data);
-    // Return ONLY the journey object as requested, or the whole parsed object if needed.
-    // The prompt says: "getCachedJourney() - Read from AsyncStorage - Parse JSON safely - Return null if invalid or missing"
-    // And on success: "Store metadata: { journey: {...}, cachedAt: Date.now() }"
     return parsed.journey || null;
   } catch (e) {
     console.error('[PNR Cache] Error parsing journey:', e);
