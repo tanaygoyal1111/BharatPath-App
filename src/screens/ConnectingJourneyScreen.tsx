@@ -301,7 +301,7 @@ export default function ConnectingJourneyScreen() {
                        arr: leg.arrTime,
                        to: leg.toCode,
                        train: `${leg.trainName} (${leg.trainNo})`,
-                       status: 'SCHEDULED'
+                       status: (idx === 0 && i === 1) ? 'CANCELLED' : 'SCHEDULED' // NEW FIX: Task 3 - Inject Mock Data logic
                      });
                      
                      // Add layover pill between legs
@@ -437,20 +437,31 @@ export default function ConnectingJourneyScreen() {
   );
 }
 
-const JourneyOptionCard = ({ option, timeInfo, isFastest, legs, fare, platform, isActive = true }: any) => (
+const JourneyOptionCard = ({ option, timeInfo, isFastest, legs, fare, platform, isActive = true }: any) => {
+  // NEW FIX: Task 1 - Global cancellation check
+  const isRouteCancelled = legs.some((leg: any) => leg.status && leg.status.toUpperCase() === 'CANCELLED');
+
+  return (
   <View style={[styles.resultCard, !isActive && { opacity: 0.9 }]}>
-    <View style={[styles.resultCardHeader, !isActive && { backgroundColor: '#E2E8F0' }]}>
+    {/* NEW FIX: Task 1 - Replace primary color with muted dark grey if cancelled */}
+    <View style={[styles.resultCardHeader, !isActive && { backgroundColor: '#E2E8F0' }, isRouteCancelled && { backgroundColor: '#44474E' }]}>
        <Text style={[styles.optionMeta, !isActive && { color: COLORS.secondary }]} numberOfLines={1} ellipsizeMode="tail">
           OPTION {option}  |  {timeInfo}
        </Text>
-       {isFastest && (
+       {/* NEW FIX: Task 1 - Change badge if Route Cancelled */}
+       {isRouteCancelled ? (
+         <View style={[styles.topBadge, { backgroundColor: '#FEE2E2' }]}>
+            <Text style={[styles.topBadgeText, { color: '#DC2626' }]}>ROUTE CANCELLED</Text>
+         </View>
+       ) : isFastest ? (
          <View style={styles.topBadge}>
             <Text style={styles.topBadgeText}>FASTEST</Text>
          </View>
-       )}
+       ) : null}
     </View>
 
-    <View style={styles.cardMain}>
+    {/* NEW FIX: Task 1 - Apply 0.5 opacity to cardMain if cancelled */}
+    <View style={[styles.cardMain, isRouteCancelled && { opacity: 0.5 }]}>
        {legs.map((leg: any, i: number) => {
          if (leg.layover) {
            return (
@@ -460,10 +471,15 @@ const JourneyOptionCard = ({ option, timeInfo, isFastest, legs, fare, platform, 
              </View>
            );
          }
+         
+         // NEW FIX: Task 2 - Identify specific cancelled leg
+         const isLegCancelled = leg.status && leg.status.toUpperCase() === 'CANCELLED';
+
          return (
            <View key={i} style={styles.legSection}>
               <View style={styles.timeCluster}>
-                 <Text style={styles.timeBig} numberOfLines={1} adjustsFontSizeToFit>{leg.dep}</Text>
+                 {/* NEW FIX: Task 2 - Strikethrough departure time */}
+                 <Text style={[styles.timeBig, isLegCancelled && { textDecorationLine: 'line-through', color: '#94A3B8' }]} numberOfLines={1} adjustsFontSizeToFit>{leg.dep}</Text>
                  <Text style={styles.stationMini} numberOfLines={2}>{(masterMap as any)[leg.from]?.n || leg.from}</Text>
               </View>
 
@@ -476,13 +492,15 @@ const JourneyOptionCard = ({ option, timeInfo, isFastest, legs, fare, platform, 
                     <View style={styles.circleMarker} />
                     <View style={styles.solidLine} />
                  </View>
-                 <View style={styles.statusPill}>
-                    <Text style={styles.statusPillText}>{leg.status}</Text>
+                 {/* NEW FIX: Task 2 - Change status pill logic if cancelled */}
+                 <View style={[styles.statusPill, isLegCancelled && { backgroundColor: '#FEE2E2', borderColor: '#FCA5A5' }]}>
+                    <Text style={[styles.statusPillText, isLegCancelled && { color: '#DC2626' }]}>{leg.status}</Text>
                  </View>
               </View>
 
               <View style={[styles.timeCluster, { alignItems: 'flex-end' }]}>
-                 <Text style={styles.timeBig} numberOfLines={1} adjustsFontSizeToFit>{leg.arr}</Text>
+                 {/* NEW FIX: Task 2 - Strikethrough arrival time */}
+                 <Text style={[styles.timeBig, isLegCancelled && { textDecorationLine: 'line-through', color: '#94A3B8' }]} numberOfLines={1} adjustsFontSizeToFit>{leg.arr}</Text>
                  <Text style={[styles.stationMini, { textAlign: 'right' }]} numberOfLines={2}>{(masterMap as any)[leg.to]?.n || leg.to}</Text>
               </View>
            </View>
@@ -503,7 +521,8 @@ const JourneyOptionCard = ({ option, timeInfo, isFastest, legs, fare, platform, 
        </View>
     </View>
   </View>
-);
+  );
+};
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.bg },

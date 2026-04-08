@@ -249,7 +249,7 @@ export default function AmenitiesListScreen() {
       <StatusBar barStyle="light-content" backgroundColor={COLORS.primary} />
       <Header
         title={config.title}
-        count={isLoading ? undefined : enrichedItems.length}
+        count={isLoading ? undefined : enrichedItems?.length || 0}
       />
 
       {isLoading ? (
@@ -262,7 +262,7 @@ export default function AmenitiesListScreen() {
         />
       ) : isError ? (
         <ErrorFallback onRetry={() => refetch()} />
-      ) : enrichedItems.length === 0 ? (
+      ) : !enrichedItems || enrichedItems.length === 0 ? (
         <EmptyState config={config} />
       ) : (
         <FlatList

@@ -9,6 +9,8 @@ import OfflineDashboard from './OfflineDashboard';
 import { useStationSearch } from '../hooks/useStationSearch';
 import { usePnrStatus, getCachedJourney, clearActiveJourney, JourneyData } from '../hooks/usePnrStatus';
 import { useJourneyNavigation } from '../hooks/useJourneyNavigation';
+import { useQuery } from '@tanstack/react-query';
+import { fetchJourneyData } from '../services/journeyService';
 import masterMap from '../api/bharatpath_master_map.json';
 import { supabase } from '../lib/supabase';
 import AuthModal from '../components/Auth/AuthModal';
@@ -550,6 +552,43 @@ const OnlineActiveJourneyCard = memo(({ data, onClear, onRefresh, status }: { da
   );
   const { navigateToJourney, getButtonConfig } = useJourneyNavigation();
 
+  // Task 1: Add the Data Fetcher
+  const { data: liveData, isLoading } = useQuery({
+    queryKey: ['journey', data.pnr],
+    queryFn: () => fetchJourneyData(data.pnr),
+    enabled: status === 'ACTIVE' && !!data.pnr,
+    // 🛡️ MAXIMUM SHIELDS: 
+    staleTime: 1000 * 60 * 60, // 1 HOUR: Tell the Dashboard this data is "fresh" for an hour so it never forces a background refetch.
+    gcTime: 1000 * 60 * 60 * 24, // Keep in memory for 24 hours
+    refetchOnMount: false, // Don't refetch just because they navigated back to the dashboard
+    refetchOnWindowFocus: false, // Don't refetch when minimizing/maximizing the app
+    refetchOnReconnect: false, // Don't refetch if their wifi drops and reconnects
+  });
+
+  // Task 2: Compute Dynamic Progress & Text
+  let progressPct = 0;
+  let currentLocationText = 'Locating train...';
+  let etaText = '--:--';
+
+  if (liveData && liveData.stations && liveData.stations.length > 0) {
+    const stations = liveData.stations;
+    const currIdx = stations.findIndex(s => s.code === liveData.currentStationCode);
+    const lastIdx = stations.length - 1;
+
+    if (currIdx !== -1) {
+      // Calculate percentage based on station index vs total stations
+      progressPct = Math.max(0, Math.min(100, (currIdx / Math.max(1, lastIdx)) * 100));
+      
+      const currentSt = stations[currIdx];
+      currentLocationText = `Arriving at ${currentSt.name}`;
+      
+      // Prefer actual arrival, fallback to scheduled
+      etaText = currentSt.actArrival || currentSt.schArrival || '--:--';
+    } else if (liveData.statusMessage) {
+      currentLocationText = liveData.statusMessage.replace(/(<([^>]+)>)/gi, ""); // Strip HTML
+    }
+  }
+
   const isUpcoming = status === 'UPCOMING';
   const isActive = status === 'ACTIVE';
   const buttonConfig = getButtonConfig(status as any);
@@ -763,13 +802,17 @@ const OnlineActiveJourneyCard = memo(({ data, onClear, onRefresh, status }: { da
                 <View style={styles.progressHeader}>
                   <View style={styles.progressRow}>
                     <Feather name="map-pin" size={14} color={COLORS.textGray} />
-                    <Text style={styles.progressText}>{data?.currentLocation || 'Arriving at MGS Junction'}</Text>
+                    <Text style={styles.progressText}>
+                      {isLoading ? 'Fetching live status...' : currentLocationText}
+                    </Text>
                   </View>
-                  <Text style={styles.etaText}>ETA {data?.eta || '20:45'}</Text>
+                  <Text style={styles.etaText}>
+                    {isLoading ? '--:--' : `ETA ${etaText}`}
+                  </Text>
                 </View>
                 <View style={styles.progressBarBg}>
-                  <View style={[styles.progressBarFill, {width: `${data?.progressPct || 65}%`}]} />
-                  <View style={[styles.progressDot, {left: `${data?.progressPct || 65}%`}]} />
+                  <View style={[styles.progressBarFill, {width: `${progressPct}%`}]} />
+                  <View style={[styles.progressDot, {left: `${progressPct}%`}]} />
                 </View>
               </View>
 

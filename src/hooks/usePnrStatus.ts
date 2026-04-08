@@ -48,6 +48,7 @@ export const usePnrStatus = (
           cachedAt: Date.now()
         };
         await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(storageData));
+        await AsyncStorage.setItem('last_tracked_pnr', pnr); // <-- Set explicitly for LiveStatusScreen fallback
         
         return journey;
       } catch (error) {
@@ -62,6 +63,7 @@ export const usePnrStatus = (
             cachedAt: Date.now()
           };
           await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(storageData));
+          await AsyncStorage.setItem('last_tracked_pnr', pnr); // <-- Set explicitly for LiveStatusScreen fallback
           
           return parsed as JourneyData;
         }

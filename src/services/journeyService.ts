@@ -6,11 +6,14 @@ import { supabase } from '../lib/supabase';
  */
 export interface JourneyStation {
   name: string;
+  code?: string;
   lat: number;
   lng: number;
   distance: number; // cumulative distance from source in km
   time: string;
-  platform: string;
+  platform?: string;
+  schArrival?: string;
+  actArrival?: string;
 }
 
 export interface JourneyAPIData {
@@ -19,7 +22,17 @@ export interface JourneyAPIData {
   trainNumber?: string;
   startTime: number;
   endTime: number;
+  currentStation?: JourneyStation; // Used by JourneyScreen
+  currentStationCode?: string;
+  statusMessage?: string;
   stations: JourneyStation[];
+  
+  // Used by JourneyScreen
+  fallback?: boolean;
+  destination?: { name?: string; code?: string };
+  distanceToDestination?: number;
+  currentSpeed?: number;
+  arrivalTime?: string;
 }
 
 /**

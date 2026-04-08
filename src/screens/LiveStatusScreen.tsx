@@ -10,6 +10,9 @@ import {
   Platform,
   ScrollView,
   ActivityIndicator,
+  LayoutAnimation,
+  Animated,
+  Switch,
 } from 'react-native';
 import { MaterialCommunityIcons, Feather } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -41,7 +44,7 @@ const COLORS = {
 };
 
 const MIN_HEIGHT = 80;
-const MAX_HEIGHT = 140;
+const MAX_HEIGHT = 280;
 
 // --- UTILS ---
 const toRad = (val: number) => (val * Math.PI) / 180;
@@ -102,7 +105,36 @@ function getConfidence({ isMoving, isNearRoute, accuracy }: { isMoving: boolean;
 export default function LiveStatusScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
-  const pnr = route.params?.pnr;
+  const [activePnr, setActivePnr] = useState<string | null>(route.params?.pnr || null);
+  const [isInitializing, setIsInitializing] = useState(!route.params?.pnr);
+
+  useEffect(() => {
+    if (!activePnr) {
+      const loadStoredPnr = async () => {
+        const stored = await AsyncStorage.getItem('last_tracked_pnr');
+        if (stored) {
+          setActivePnr(stored);
+        } else {
+          // Task 3: Secondary fallback to extract PNR from journey_cache
+          const cachedJourneyStr = await AsyncStorage.getItem('journey_cache');
+          if (cachedJourneyStr) {
+            try {
+              const parsedJourney = JSON.parse(cachedJourneyStr);
+              if (parsedJourney?.pnr) {
+                setActivePnr(parsedJourney.pnr);
+              }
+            } catch (e) {
+              // Ignore cache parse error
+            }
+          }
+        }
+        setIsInitializing(false);
+      };
+      loadStoredPnr();
+    } else {
+      setIsInitializing(false);
+    }
+  }, [activePnr]);
 
   // State
   const [journey, setJourney] = useState<JourneyAPIData | null>(null);
@@ -111,6 +143,34 @@ export default function LiveStatusScreen() {
   const [progress, setProgress] = useState<{ currentIndex: number; distanceToNext: number } | null>(null);
   const [confidence, setConfidence] = useState<Confidence>('LOW');
   const [layoutOffsets, setLayoutOffsets] = useState<{ [key: number]: number }>({});
+  
+  // Hybrid Tracking State
+  const [isBoarded, setIsBoarded] = useState(false);
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1.5, duration: 1000, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 1000, useNativeDriver: true }),
+      ])
+    ).start();
+  }, [pulseAnim]);
+
+  // Handle hybrid mode persistence
+  useEffect(() => {
+    const loadBoardedState = async () => {
+      if (!activePnr) return;
+      const val = await AsyncStorage.getItem(`isBoarded_${activePnr}`);
+      if (val) setIsBoarded(val === 'true');
+    };
+    loadBoardedState();
+  }, [activePnr]);
+
+  const toggleIsBoarded = async (val: boolean) => {
+    setIsBoarded(val);
+    if (activePnr) await AsyncStorage.setItem(`isBoarded_${activePnr}`, val ? 'true' : 'false');
+  };
   
   // Proximity State
   const [isProximityEnabled, setIsProximityEnabled] = useState(false);
@@ -135,10 +195,12 @@ export default function LiveStatusScreen() {
 
   // 1. TanStack Query
   const { data: fetchedJourney, isLoading, error } = useQuery({
-    queryKey: ['journey', pnr],
-    queryFn: () => fetchJourneyData(pnr),
-    enabled: !!pnr,
-    staleTime: Infinity,
+    queryKey: ['journey', activePnr],
+    queryFn: () => fetchJourneyData(activePnr!),
+    enabled: !!activePnr,
+    staleTime: 60000, 
+    refetchOnWindowFocus: false,
+    refetchInterval: 60000,
     retry: 2,
     retryDelay: 1000,
   });
@@ -165,9 +227,9 @@ export default function LiveStatusScreen() {
   useEffect(() => {
     const setupProximity = async () => {
       const lastPnr = await AsyncStorage.getItem('last_tracked_pnr');
-      if (pnr && lastPnr !== pnr) {
+      if (activePnr && lastPnr !== activePnr) {
         await AsyncStorage.removeItem('alert_triggered');
-        await AsyncStorage.setItem('last_tracked_pnr', pnr);
+        await AsyncStorage.setItem('last_tracked_pnr', activePnr);
         setAlertTriggered(false);
         lastAlertTimeRef.current = 0;
       } else {
@@ -179,7 +241,7 @@ export default function LiveStatusScreen() {
       if (pEnabled) setIsProximityEnabled(JSON.parse(pEnabled));
     };
     setupProximity();
-  }, [pnr]);
+  }, [activePnr]);
 
   useEffect(() => {
     if (jState === 'COMPLETED') {
@@ -206,8 +268,30 @@ export default function LiveStatusScreen() {
     }
   }, [journey, isLoading]);
 
-  // 4. Location Engine
+  // 4. Remote Tracker (Mode A)
   useEffect(() => {
+    if (isBoarded || !journey?.stations) return;
+    
+    if (journey.currentStationCode) {
+      const idx = journey.stations.findIndex(st => st.code === journey.currentStationCode);
+      if (idx !== -1) {
+        setProgress((prev) => {
+          if (prev && prev.currentIndex === idx) return prev;
+          LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+          return {
+            currentIndex: Math.max(idx, prev?.currentIndex || 0),
+            distanceToNext: 0,
+          };
+        });
+        setJState('ACTIVE');
+        setConfidence('HIGH');
+      }
+    }
+  }, [isBoarded, journey]);
+
+  // 5. Location Engine (Mode B)
+  useEffect(() => {
+    if (!isBoarded) return;
     if (jState !== 'ACTIVE' && jState !== 'NOT_TRAVELLING') return;
 
     let sub: Location.LocationSubscription;
@@ -305,7 +389,7 @@ export default function LiveStatusScreen() {
       );
 
       // --- PROXIMITY ALERT ENGINE ---
-      if (isProximityEnabled && conf !== 'LOW') {
+      if (isBoarded && isProximityEnabled && conf !== 'LOW') {
         const destNode = stations[stations.length - 1];
         const distToDest = getDistance(smoothedCoords, destNode);
         
@@ -334,6 +418,9 @@ export default function LiveStatusScreen() {
         if (prev && nearestIdx < prev.currentIndex) {
           return prev; // Never allow backward movement
         }
+        if (!prev || nearestIdx !== prev.currentIndex) {
+          LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+        }
         return {
           currentIndex: Math.max(nearestIdx, prev?.currentIndex || 0),
           distanceToNext: Math.round(distToNextNode),
@@ -343,15 +430,7 @@ export default function LiveStatusScreen() {
     [journey, smoothLocation]
   );
 
-  // 5. Auto Scroll
-  useEffect(() => {
-    if (progress && layoutOffsets[progress.currentIndex] !== undefined) {
-      scrollRef.current?.scrollTo({
-        y: Math.max(0, layoutOffsets[progress.currentIndex] - 40),
-        animated: true,
-      });
-    }
-  }, [progress, layoutOffsets]);
+  // 5. Auto Scroll removed for manual control via FAB
 
   // 6. Test Mode Simulator Component
   useEffect(() => {
@@ -361,7 +440,7 @@ export default function LiveStatusScreen() {
     let mockIndex = 0;
     const interval = setInterval(() => {
       const stations = journey.stations;
-      if (mockIndex >= stations.length) {
+      if (!stations || mockIndex >= stations.length) {
         clearInterval(interval);
         setJState('COMPLETED');
         return;
@@ -388,9 +467,8 @@ export default function LiveStatusScreen() {
   }, [TEST_MODE, journey, handleLocationUpdate]);
 
   // --- RENDERS ---
-  if (!pnr) {
-    return <EmptyState text="Enter PNR to start tracking" onBack={() => navigation.goBack()} />;
-  }
+  if (isInitializing) return <SafeAreaView style={styles.safeArea} />; // Blank while checking storage
+  if (!activePnr) return <EmptyState text="Enter PNR to start tracking" onBack={() => navigation.navigate('Dashboard')} />;
 
   if (isLoading) {
     return (
@@ -449,6 +527,9 @@ export default function LiveStatusScreen() {
         <View style={styles.trainInfoRow}>
           <Text style={styles.liveTrackingText}>LIVE TRACKING</Text>
           <Text style={styles.trainNumberName}>{journey.trainName}</Text>
+          {journey.statusMessage ? (
+            <Text style={styles.statusMessage}>{journey.statusMessage}</Text>
+          ) : null}
         </View>
       </View>
 
@@ -468,6 +549,16 @@ export default function LiveStatusScreen() {
               <Text style={styles.metricLabel}>DISTANCE</Text>
               <Text style={styles.metricValue}>{progress?.distanceToNext ?? '--'} <Text style={{ fontSize: 14 }}>KM</Text></Text>
             </View>
+          </View>
+          <View style={styles.focusCardDivider} />
+          <View style={styles.toggleRow}>
+             <Text style={styles.toggleLabel}>I am inside this train</Text>
+             <Switch 
+               value={isBoarded} 
+               onValueChange={toggleIsBoarded}
+               trackColor={{ false: COLORS.slateBorder, true: COLORS.emerald }}
+               thumbColor={COLORS.white}
+             />
           </View>
         </View>
       </View>
@@ -511,6 +602,16 @@ export default function LiveStatusScreen() {
                 segmentHeight = normalize(physicalDist, MIN_HEIGHT, MAX_HEIGHT);
               }
 
+              // Calculate Train Positioning
+              let trainTopOffset = 0;
+              if (isActiveNode && !isLast) {
+                const nextStation = stations[index + 1];
+                const totalSegmentDist = nextStation?.distance - station.distance || 1;
+                const coveredDist = totalSegmentDist - (progress?.distanceToNext || 0);
+                const percentComplete = Math.max(0, Math.min(1, coveredDist / totalSegmentDist));
+                trainTopOffset = percentComplete * segmentHeight;
+              }
+
               return (
                 <View 
                   key={index} 
@@ -529,32 +630,54 @@ export default function LiveStatusScreen() {
                       <View style={[styles.line, isPassed ? styles.lineSolid : styles.lineDashed]} />
                     )}
 
-                    <View
-                      style={[
-                        styles.dot,
-                        isPassed && styles.completedDot,
-                        isActiveNode && styles.currentDot,
-                        isLast && styles.destinationDot,
-                        !isPassed && !isLast && !isActiveNode && styles.upcomingDot,
-                      ]}
-                    >
-                      {isActiveNode ? (
-                         <MaterialCommunityIcons name="train" size={16} color={COLORS.white} />
-                      ) : isLast ? (
-                         <Feather name="flag" size={14} color={COLORS.white} />
-                      ) : isPassed ? (
-                         <MaterialCommunityIcons name="check" size={14} color={COLORS.white} />
-                      ) : null}
+                    {isActiveNode && !isLast && (
+                      <Animated.View style={[styles.currentDot, { position: 'absolute', top: Math.max(0, trainTopOffset), zIndex: 10 }]}>
+                        <MaterialCommunityIcons name="train" size={16} color={COLORS.white} />
+                      </Animated.View>
+                    )}
+
+                    <View style={styles.dotContainer}>
+                      {isActiveNode && (
+                         <Animated.View style={[
+                           styles.pulseDot, 
+                           { transform: [{ scale: pulseAnim }], opacity: pulseAnim.interpolate({inputRange: [1, 1.5], outputRange: [0.5, 0]}) }
+                         ]} />
+                      )}
+                      <View
+                        style={[
+                          styles.dot,
+                          isPassed && styles.completedDot,
+                          isActiveNode && { backgroundColor: 'transparent' }, // hide underlying static dot
+                          isLast && styles.destinationDot,
+                          !isPassed && !isLast && !isActiveNode && styles.upcomingDot,
+                        ]}
+                      >
+                        {isLast ? (
+                           <Feather name="flag" size={14} color={COLORS.white} />
+                        ) : (isPassed && !isActiveNode) ? (
+                           <MaterialCommunityIcons name="check" size={14} color={COLORS.white} />
+                        ) : null}
+                      </View>
                     </View>
                   </View>
 
                   {/* CONTENT */}
                   <View style={styles.content}>
                     <Text style={styles.stationName}>{station.name}</Text>
+                    {station.platform && (
+                      <Text style={styles.platformText}>PF {station.platform}</Text>
+                    )}
+                    
+                    {(station.schArrival || station.actArrival) && (
+                      <View style={styles.arrivalTimesRow}>
+                        {station.schArrival && <Text style={styles.schTime}>SCH: {station.schArrival}</Text>}
+                        {station.actArrival && <Text style={styles.actTime}>ACT: {station.actArrival}</Text>}
+                      </View>
+                    )}
 
                     {isActiveNode && (
                       <Text style={styles.status}>
-                        {progress?.distanceToNext} KM REMAINING
+                        {progress?.distanceToNext ? `${progress.distanceToNext} KM REMAINING` : 'REACHING SHORTLY'}
                       </Text>
                     )}
                     {isPassed && !isActiveNode && (
@@ -566,6 +689,26 @@ export default function LiveStatusScreen() {
                     {isLast && (
                       <Text style={styles.remaining}>DESTINATION</Text>
                     )}
+
+                    {station.lat && station.lng ? (
+                      <View style={styles.amenityButtonsRow}>
+                        <TouchableOpacity
+                          style={[styles.amenityButton, { backgroundColor: 'rgba(229, 57, 53, 0.1)' }]}
+                          onPress={() => navigation.navigate('AmenitiesList', { type: 'hospital', stationLat: station.lat, stationLng: station.lng })}
+                        >
+                          <MaterialCommunityIcons name="hospital-marker" size={14} color="#E53935" />
+                          <Text style={[styles.amenityButtonText, { color: '#E53935' }]}>Hospitals</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={[styles.amenityButton, { backgroundColor: 'rgba(21, 101, 192, 0.1)' }]}
+                          onPress={() => navigation.navigate('AmenitiesList', { type: 'hotel', stationLat: station.lat, stationLng: station.lng })}
+                        >
+                          <MaterialCommunityIcons name="bed" size={14} color="#1565C0" />
+                          <Text style={[styles.amenityButtonText, { color: '#1565C0' }]}>Hotels</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : null}
                   </View>
                 </View>
               );
@@ -573,6 +716,20 @@ export default function LiveStatusScreen() {
           </ScrollView>
         </View>
       </View>
+
+      {/* FAB - Back to Live */}
+      <TouchableOpacity
+        style={styles.fab}
+        activeOpacity={0.8}
+        onPress={() => {
+          scrollRef.current?.scrollTo({
+            y: Math.max(0, (layoutOffsets[progress?.currentIndex || 0] || 0) - 40),
+            animated: true,
+          });
+        }}
+      >
+        <MaterialCommunityIcons name="crosshairs-gps" size={24} color={COLORS.white} />
+      </TouchableOpacity>
     </SafeAreaView>
   );
 }
@@ -663,6 +820,12 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: -0.5,
   },
+  statusMessage: {
+    color: COLORS.saffron,
+    fontSize: 14,
+    fontWeight: '700',
+    marginTop: 4,
+  },
   focusCardContainer: {
     alignItems: 'center',
     marginTop: -60,
@@ -727,6 +890,19 @@ const styles = StyleSheet.create({
     height: 40,
     backgroundColor: COLORS.slateBorder,
     opacity: 0.4,
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+    paddingHorizontal: 20,
+    marginTop: 8,
+  },
+  toggleLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: COLORS.slateDark,
   },
 
   banner: {
@@ -807,6 +983,20 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
     width: 0,
   },
+  dotContainer: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: -4,
+  },
+  pulseDot: {
+    position: 'absolute',
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: COLORS.emerald,
+  },
   dot: {
     width: 24,
     height: 24,
@@ -852,13 +1042,34 @@ const styles = StyleSheet.create({
     flex: 1,
     marginLeft: 10,
     marginTop: 2,
-    paddingBottom: 30,
+    paddingBottom: 40,
   },
   stationName: {
     fontSize: 16,
     fontWeight: '800',
     color: COLORS.slateDark,
     letterSpacing: -0.2,
+  },
+  platformText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.slateMuted,
+    marginTop: 2,
+  },
+  arrivalTimesRow: {
+    flexDirection: 'row',
+    marginTop: 4,
+    gap: 8,
+  },
+  schTime: {
+    fontSize: 11,
+    color: COLORS.slateMuted,
+    fontWeight: '600',
+  },
+  actTime: {
+    fontSize: 11,
+    color: COLORS.emerald,
+    fontWeight: '700',
   },
   status: {
     fontSize: 12,
@@ -872,5 +1083,39 @@ const styles = StyleSheet.create({
     color: COLORS.slateMuted,
     marginTop: 4,
     letterSpacing: 0.5,
+  },
+  amenityButtonsRow: {
+    flexDirection: 'row',
+    marginTop: 12,
+    gap: 8,
+  },
+  amenityButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    gap: 4,
+  },
+  amenityButtonText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  fab: {
+    position: 'absolute',
+    bottom: 24,
+    right: 24,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: COLORS.navy,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: COLORS.navy,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+    elevation: 8,
+    zIndex: 100,
   },
 });

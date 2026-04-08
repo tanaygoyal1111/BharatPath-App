@@ -13,6 +13,7 @@ export interface JourneyLeg {
   depTime: string;
   arrTime: string;
   duration: number;
+  status?: 'SCHEDULED' | 'CANCELLED' | 'DELAYED'; // NEW: Optional status for live hydration
 }
 
 export interface JourneyOption {
@@ -20,6 +21,7 @@ export interface JourneyOption {
   legs: JourneyLeg[];
   totalDuration: number;
   layoverDuration?: number;
+  isRouteCancelled?: boolean; // NEW: Flag for the UI to quickly grey out the card
 }
 
 /**

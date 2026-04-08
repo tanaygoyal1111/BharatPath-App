@@ -1,0 +1,14 @@
+src/screens/JourneyScreen.tsx(596,37): error TS2339: Property 'fallback' does not exist on type 'JourneyAPIData'.
+src/screens/JourneyScreen.tsx(597,33): error TS2339: Property 'destination' does not exist on type 'JourneyAPIData'.
+src/screens/JourneyScreen.tsx(597,60): error TS2339: Property 'destination' does not exist on type 'JourneyAPIData'.
+src/screens/JourneyScreen.tsx(598,28): error TS2339: Property 'distanceToDestination' does not exist on type 'JourneyAPIData'.
+src/screens/JourneyScreen.tsx(603,25): error TS2339: Property 'currentSpeed' does not exist on type 'JourneyAPIData'.
+src/screens/JourneyScreen.tsx(604,42): error TS2339: Property 'arrivalTime' does not exist on type 'JourneyAPIData'.
+src/screens/JourneyScreen.tsx(606,50): error TS2339: Property 'currentSpeed' does not exist on type 'JourneyAPIData'.
+src/screens/JourneyScreen.tsx(606,70): error TS2339: Property 'arrivalTime' does not exist on type 'JourneyAPIData'.
+test_bfs.ts(6,41): error TS2339: Property 'length' does not exist on type 'Promise<JourneyOption[]>'.
+test_bfs.ts(7,11): error TS2339: Property 'forEach' does not exist on type 'Promise<JourneyOption[]>'.
+test_bfs.ts(7,20): error TS7006: Parameter 'opt' implicitly has an 'any' type.
+test_bfs.ts(7,25): error TS7006: Parameter 'i' implicitly has an 'any' type.
+test_bfs.ts(9,23): error TS7006: Parameter 'leg' implicitly has an 'any' type.
+test_bfs.ts(9,28): error TS7006: Parameter 'j' implicitly has an 'any' type.

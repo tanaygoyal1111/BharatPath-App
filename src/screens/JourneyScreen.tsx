@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useMemo, useCallback, memo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
 import {
   View,
   Text,
@@ -14,6 +14,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
+import * as Location from 'expo-location';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery } from '@tanstack/react-query';
 import Animated, {
   useSharedValue,
@@ -391,14 +393,14 @@ const AmenitiesList = memo(({
         id: '1',
         label: 'Hospitals',
         icon: 'local-hospital',
-        count: hospitals.length,
+        count: hospitals?.length || 0,
         emptyText: 'No hospitals found nearby',
       },
       {
         id: '2',
         label: 'Hotels',
         icon: 'hotel',
-        count: hotels.length,
+        count: hotels?.length || 0,
         emptyText: 'No hotels found nearby',
       },
     ];
@@ -583,7 +585,7 @@ export default function JourneyScreen() {
   const pnr: string = route.params?.pnr || '';
 
   // ── TanStack Query ────────────────────────────────────────
-  const { data, isLoading, error, refetch } = useQuery<JourneyAPIData>({
+  const { data: liveData, isLoading, error, refetch } = useQuery<JourneyAPIData>({
     queryKey: ['journey', pnr],
     queryFn: () => fetchJourneyData(pnr),
     enabled: !!pnr,
@@ -592,32 +594,101 @@ export default function JourneyScreen() {
     retry: 2,
   });
 
+  // ── States for Focal Point & Distance ─────────────────────────
+  const [focalLat, setFocalLat] = useState<number | null>(null);
+  const [focalLng, setFocalLng] = useState<number | null>(null);
+  const [kmsRemaining, setKmsRemaining] = useState(0);
+
+  const [isBoarded, setIsBoarded] = useState(false);
+  const [deviceCoords, setDeviceCoords] = useState<{latitude: number; longitude: number} | null>(null);
+
+  // Initialize board status & GPS
+  useEffect(() => {
+    const initBoarding = async () => {
+      const boarded = await AsyncStorage.getItem(`isBoarded_${pnr}`);
+      const isBoardedStatus = boarded === 'true';
+      setIsBoarded(isBoardedStatus);
+
+      if (isBoardedStatus) {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          // If already boarded, we use GPS coords for focal
+          const loc = await Location.getCurrentPositionAsync({});
+          setDeviceCoords(loc.coords);
+        }
+      }
+    };
+    if (pnr) {
+      initBoarding();
+    }
+  }, [pnr]);
+
+  // Compute Active Focal Coordinates & Remaining Distance
+  useEffect(() => {
+    // If user has GPS boarded mode ON, let the existing expo-location logic handle it
+    if (isBoarded && deviceCoords) {
+      setFocalLat(deviceCoords.latitude);
+      setFocalLng(deviceCoords.longitude);
+
+      // (Assume fallback dummy GPS distance logic here if needed, 
+      // but usually destination is still derived from liveData)
+      if (liveData && liveData.stations && liveData.stations.length > 0) {
+        const dest = liveData.stations[liveData.stations.length - 1];
+        if (dest && dest.distance) {
+          // Placeholder naive setup if user has GPS.
+          // True distance would use haversine against dest, but for now we follow the rule.
+          setKmsRemaining(liveData.distanceToDestination ?? 0); 
+        }
+      }
+      return;
+    }
+
+    // REMOTE MODE: Use the Live API Data
+    if (liveData && liveData.stations) {
+      const currIdx = liveData.stations.findIndex(s => s.code === liveData.currentStationCode);
+      const destIdx = liveData.stations.length - 1;
+
+      if (currIdx !== -1) {
+        const currentStation = liveData.stations[currIdx];
+        const destinationStation = liveData.stations[destIdx];
+
+        if (currentStation.lat && currentStation.lng) {
+          setFocalLat(currentStation.lat);
+          setFocalLng(currentStation.lng);
+        }
+
+        const currentDist = Number(currentStation.distance) || 0;
+        const totalDist = Number(destinationStation.distance) || 0;
+        setKmsRemaining(Math.max(0, totalDist - currentDist));
+      } else {
+        // Fallback to top-level distance if currentStation mapping fails
+        setKmsRemaining(liveData.distanceToDestination ?? 0);
+      }
+    }
+  }, [liveData, isBoarded, deviceCoords]);
+
   // ── Derived data (with fallbacks) ─────────────────────────
-  const isOnline = !error && !data?.fallback;
-  const destinationName = data?.destination?.name || data?.destination?.code || 'DESTINATION';
-  const distanceKm = data?.distanceToDestination ?? 0;
+  const isOnline = !error && !liveData?.fallback;
+  const destinationName = liveData?.destination?.name || liveData?.destination?.code || 'DESTINATION';
 
   const trainData: TrainData = useMemo(() => ({
-    trainNumber: data?.trainNumber || 'N/A',
-    trainName: data?.trainName || 'Data unavailable',
-    currentSpeed: data?.currentSpeed ?? 0,
-    arrivalTime: formatArrivalTime(data?.arrivalTime),
+    trainNumber: liveData?.trainNumber || 'N/A',
+    trainName: liveData?.trainName || 'Data unavailable',
+    currentSpeed: liveData?.currentSpeed ?? 0,
+    arrivalTime: formatArrivalTime(liveData?.arrivalTime),
     arrivalTimezone: 'IST',
-  }), [data?.trainNumber, data?.trainName, data?.currentSpeed, data?.arrivalTime]);
+  }), [liveData?.trainNumber, liveData?.trainName, liveData?.currentSpeed, liveData?.arrivalTime]);
 
-  // ── Amenities Query (uses currentStation lat/lng) ─────────
-  const currentLat = data?.currentStation?.lat;
-  const currentLng = data?.currentStation?.lng;
-
+  // ── Amenities Query (uses strict focalLat/focalLng) ─────────
   const {
     data: amenitiesData,
     isLoading: amenitiesLoading,
     isError: amenitiesError,
   } = useQuery<AmenitiesAPIResponse>({
-    queryKey: ['amenities', currentLat, currentLng],
-    queryFn: () => fetchAmenities(currentLat!, currentLng!),
-    enabled: !!currentLat && !!currentLng,
-    staleTime: 1000 * 60 * 60, // 1 hour — amenities don't change often
+    queryKey: ['amenities', focalLat, focalLng],
+    queryFn: () => fetchAmenities(focalLat!, focalLng!),
+    enabled: !!focalLat && !!focalLng,
+    staleTime: 1000 * 60 * 60,
   });
 
   return (
@@ -632,7 +703,7 @@ export default function JourneyScreen() {
         bounces={false}
       >
         {/* Error state: show retry but keep layout */}
-        {error && !data ? (
+        {error && !liveData ? (
           <ErrorState
             message={(error as any)?.message || 'Unable to fetch journey data. Please check your connection.'}
             onRetry={() => refetch()}
@@ -640,19 +711,19 @@ export default function JourneyScreen() {
         ) : null}
 
         {/* Map + Distance — always render structure, shimmer when loading */}
-        {(!error || data) && (
+        {(!error || liveData) && (
           <>
             <MapCard
               destinationName={destinationName}
-              distanceKm={distanceKm}
-              isLoading={isLoading}
+              distanceKm={kmsRemaining}
+              isLoading={isLoading || focalLat === null}
             />
             <AmenitiesList
               amenitiesData={amenitiesData}
-              isLoading={amenitiesLoading}
+              isLoading={amenitiesLoading || focalLat === null}
               isError={amenitiesError}
-              stationLat={currentLat}
-              stationLng={currentLng}
+              stationLat={focalLat}
+              stationLng={focalLng}
             />
             <ProximityAlertCard />
             <TrainStatusCard train={trainData} isLoading={isLoading} />
