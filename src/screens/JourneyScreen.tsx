@@ -17,6 +17,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery } from '@tanstack/react-query';
+import { useNetInfo } from '@react-native-community/netinfo';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -124,6 +125,7 @@ const formatArrivalTime = (isoString?: string): string => {
 
 // ─── ANIMATED MAP CARD ───────────────────────────────────────
 const MapCard = memo(({ destinationName, distanceKm, isLoading }: { destinationName: string; distanceKm: number; isLoading?: boolean }) => {
+  const netInfo = useNetInfo();
   // Pulsing marker
   const pulse1 = useRef(new RNAnimated.Value(0)).current;
   const pulse2 = useRef(new RNAnimated.Value(0)).current;
@@ -209,13 +211,15 @@ const MapCard = memo(({ destinationName, distanceKm, isLoading }: { destinationN
   return (
     <Animated.View entering={FadeInDown.duration(600).delay(200)} style={styles.mapCardContainer}>
       {/* System Status */}
-      <View style={styles.systemStatusRow}>
-        <Text style={styles.systemStatusLabel}>SYSTEM STATUS</Text>
-        <View style={styles.systemStatusContent}>
-          <MaterialCommunityIcons name="map-marker-radius" size={20} color={COLORS.primary} />
-          <Text style={styles.systemStatusText}>Showing Localized Map Data (No Internet Required)</Text>
+      {!netInfo.isConnected && (
+        <View style={styles.systemStatusRow}>
+          <Text style={styles.systemStatusLabel}>SYSTEM STATUS</Text>
+          <View style={styles.systemStatusContent}>
+            <MaterialCommunityIcons name="map-marker-radius" size={20} color={COLORS.primary} />
+            <Text style={styles.systemStatusText}>Showing Localized Map Data (No Internet Required)</Text>
+          </View>
         </View>
-      </View>
+      )}
 
       {/* Map Area */}
       <View style={styles.mapArea}>
@@ -446,36 +450,11 @@ const AmenitiesList = memo(({
   );
 });
 
-// ─── PROXIMITY ALERT CARD ────────────────────────────────────
-const ProximityAlertCard = memo(() => {
-  const glowAnim = useRef(new RNAnimated.Value(0.4)).current;
 
-  useEffect(() => {
-    RNAnimated.loop(
-      RNAnimated.sequence([
-        RNAnimated.timing(glowAnim, { toValue: 1, duration: 1500, useNativeDriver: true }),
-        RNAnimated.timing(glowAnim, { toValue: 0.4, duration: 1500, useNativeDriver: true }),
-      ])
-    ).start();
-  }, []);
-
-  return (
-    <Animated.View entering={FadeInDown.duration(500).delay(600)} style={styles.proximityCard}>
-      <View style={styles.proximityHeader}>
-        <RNAnimated.View style={{ opacity: glowAnim }}>
-          <MaterialCommunityIcons name="alert-circle" size={18} color={COLORS.saffron} />
-        </RNAnimated.View>
-        <Text style={styles.proximityTitle}>GEOFENCE ALERT</Text>
-      </View>
-      <Text style={styles.proximityText}>
-        Proximity alert will trigger when you are within 2km of the arrival platform.
-      </Text>
-    </Animated.View>
-  );
-});
 
 // ─── TRAIN STATUS CARD ───────────────────────────────────────
-const TrainStatusCard = memo(({ train, isLoading }: { train: TrainData; isLoading?: boolean }) => {
+const TrainStatusCard = memo(({ train, isLoading, pnr }: { train: TrainData; isLoading?: boolean; pnr: string }) => {
+  const navigation = useNavigation<any>();
   const cardScale = useSharedValue(0.92);
   const cardOpacity = useSharedValue(0);
 
@@ -526,16 +505,20 @@ const TrainStatusCard = memo(({ train, isLoading }: { train: TrainData; isLoadin
 
         {/* Speed */}
         <View style={styles.trainSpeedRow}>
-          <Text style={styles.trainSpeedLabel}>CURRENT SPEED</Text>
+          <Text style={styles.trainSpeedLabel}>AVG SPEED</Text>
           {isLoading ? (
             <ShimmerBlock width={100} height={24} style={{ marginTop: 4, borderRadius: 8 }} />
           ) : (
-            <Text style={styles.trainSpeedValue}>{train?.currentSpeed ?? '--'} km/h</Text>
+            <Text style={styles.trainSpeedValue}>{train?.currentSpeed ?? '--'}</Text>
           )}
         </View>
 
         {/* Full Schedule Button */}
-        <TouchableOpacity style={styles.scheduleBtn} activeOpacity={0.8}>
+        <TouchableOpacity 
+          style={styles.scheduleBtn} 
+          activeOpacity={0.8}
+          onPress={() => navigation.navigate('LiveStatus', { pnr: pnr })}
+        >
           <Text style={styles.scheduleBtnText}>FULL SCHEDULE</Text>
         </TouchableOpacity>
       </View>
@@ -671,13 +654,60 @@ export default function JourneyScreen() {
   const isOnline = !error && !liveData?.fallback;
   const destinationName = liveData?.destination?.name || liveData?.destination?.code || 'DESTINATION';
 
+  let arrivalEstimate = '--:--';
+  let averageSpeed = '--';
+
+  // Identify which variable holds the PNR string in this component (e.g., pnr or activePnr)
+  const currentPnr = pnr; 
+
+  if (currentPnr === '1234567890') {
+    // 🚀 DEMO MODE: Perfect UI data for presentations
+    arrivalEstimate = '04:40';
+    averageSpeed = '72 km/h';
+    
+  } else if (liveData && liveData.stations && liveData.stations.length > 0) {
+    // 🌍 PRODUCTION MODE: Dynamic math for real PNRs
+    const stations = liveData.stations;
+    const source = stations[0];
+    const destination = stations[stations.length - 1];
+    const currIdx = stations.findIndex((s: any) => s.code === liveData.currentStationCode);
+    
+    // Dynamic ETA
+    arrivalEstimate = (destination as any).actArrival || 
+                      (destination as any).schArrival || 
+                      (destination as any).time || 
+                      '--:--';
+
+    // Dynamic Average Speed
+    if (currIdx > 0) {
+      const currentStation = stations[currIdx];
+      const distanceCovered = parseInt((currentStation.distance as any) || '0', 10);
+      const departureString = (source as any).actDeparture || (source as any).schDeparture || (source as any).time; 
+      
+      if (departureString && !isNaN(distanceCovered)) {
+        const departureTime = new Date(departureString).getTime();
+        const currentTime = Date.now();
+        
+        if (!isNaN(departureTime)) {
+          const timeElapsedHours = (currentTime - departureTime) / (1000 * 60 * 60);
+          if (timeElapsedHours > 0) {
+            const calcSpeed = Math.round(distanceCovered / timeElapsedHours);
+            if (calcSpeed > 0 && calcSpeed <= 160) {
+              averageSpeed = `${calcSpeed} km/h`;
+            }
+          }
+        }
+      }
+    }
+  }
+
   const trainData: TrainData = useMemo(() => ({
     trainNumber: liveData?.trainNumber || 'N/A',
     trainName: liveData?.trainName || 'Data unavailable',
-    currentSpeed: liveData?.currentSpeed ?? 0,
-    arrivalTime: formatArrivalTime(liveData?.arrivalTime),
+    currentSpeed: averageSpeed as any,
+    arrivalTime: arrivalEstimate,
     arrivalTimezone: 'IST',
-  }), [liveData?.trainNumber, liveData?.trainName, liveData?.currentSpeed, liveData?.arrivalTime]);
+  }), [liveData, averageSpeed, arrivalEstimate]);
 
   // ── Amenities Query (uses strict focalLat/focalLng) ─────────
   const {
@@ -725,8 +755,7 @@ export default function JourneyScreen() {
               stationLat={focalLat}
               stationLng={focalLng}
             />
-            <ProximityAlertCard />
-            <TrainStatusCard train={trainData} isLoading={isLoading} />
+            <TrainStatusCard train={trainData} isLoading={isLoading} pnr={pnr} />
           </>
         )}
         <View style={styles.scrollSpacer} />
@@ -999,32 +1028,7 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
 
-  // Proximity Alert
-  proximityCard: {
-    marginHorizontal: 16,
-    marginTop: 16,
-    backgroundColor: COLORS.alertBg,
-    borderRadius: 16,
-    padding: 18,
-  },
-  proximityHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 8,
-  },
-  proximityTitle: {
-    fontSize: 11,
-    fontWeight: '900',
-    color: COLORS.saffron,
-    letterSpacing: 1,
-  },
-  proximityText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: COLORS.mediumGray,
-    lineHeight: 21,
-  },
+
 
   // Train Status Card
   trainStatusCard: {

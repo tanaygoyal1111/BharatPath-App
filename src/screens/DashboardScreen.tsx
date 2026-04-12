@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback, memo } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Dimensions, StatusBar, Platform, Modal, ActivityIndicator, TextInput, Alert, Animated as RNAnimated, Switch } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Dimensions, StatusBar, Platform, Modal, ActivityIndicator, TextInput, Alert, Animated as RNAnimated, Switch, Linking } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
+import * as Location from 'expo-location';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -15,6 +16,7 @@ import masterMap from '../api/bharatpath_master_map.json';
 import { supabase } from '../lib/supabase';
 import AuthModal from '../components/Auth/AuthModal';
 import { BottomNav } from '../components/Navigation/BottomNav';
+import { useNetInfo } from '@react-native-community/netinfo';
 
 const { width } = Dimensions.get('window');
 
@@ -38,6 +40,16 @@ const COLORS = {
   softBlue: '#E3F2FD',
 };
 
+const getJourneyStatus = (journey: JourneyData) => {
+  const now = new Date();
+  if (!journey.departs || !journey.arrival) return 'ACTIVE';
+  const dep = new Date(journey.departs);
+  const arr = new Date(journey.arrival);
+  if (now < dep) return 'UPCOMING';
+  if (now >= dep && now <= arr) return 'ACTIVE';
+  return 'COMPLETED';
+};
+
 export default function Dashboard() {
   const navigation = useNavigation<any>();
   const [isOffline, setIsOffline] = useState(false);
@@ -48,34 +60,66 @@ export default function Dashboard() {
   const [showAuthModal, setShowAuthModal] = useState(false);
 
   // Proximity Alert State
-  const [isProximityEnabled, setIsProximityEnabled] = useState(false);
+  const [alertsEnabled, setAlertsEnabled] = useState(false);
 
   useEffect(() => {
-    AsyncStorage.getItem('proximity_enabled').then(val => {
-      if (val) setIsProximityEnabled(JSON.parse(val));
+    AsyncStorage.getItem('proximity_alerts_enabled').then(val => {
+      if (val) setAlertsEnabled(JSON.parse(val));
     });
   }, []);
 
-  const handleToggleProximity = async (value: boolean) => {
+  const requestSmartLocationPermission = async () => {
+    const providerStatus = await Location.hasServicesEnabledAsync();
+    if (!providerStatus) {
+      Alert.alert('Location Disabled', 'Please enable Location Services in your phone settings.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Open Settings', onPress: () => Linking.openSettings() }
+      ]);
+      return false;
+    }
+    const { status } = await Location.getForegroundPermissionsAsync();
+    if (status === 'granted') return true;
+    if (status === 'undetermined' || status === 'denied') {
+      const { status: newStatus } = await Location.requestForegroundPermissionsAsync();
+      if (newStatus === 'granted') return true;
+      if (newStatus === 'denied') {
+        Alert.alert(
+          'Permission Blocked',
+          'We need your location for proximity alerts. Please enable it in Settings.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() }
+          ]
+        );
+      }
+      return false;
+    }
+    return false;
+  };
+
+  const handleToggleAlerts = async (value: boolean) => {
     if (!activeJourney) return; // Guard: Never allow toggle without a journey
 
     if (value) {
-      const { status } = await Notifications.getPermissionsAsync();
-      if (status !== 'granted') {
-        const { status: newStatus } = await Notifications.requestPermissionsAsync();
-        if (newStatus !== 'granted') {
-          Alert.alert("Permission required", "Enable notifications to use proximity alerts.");
-          return;
-        }
-      }
+      const hasPermission = await requestSmartLocationPermission();
+      if (!hasPermission) return; // Keep switch OFF
     }
-    setIsProximityEnabled(value);
-    await AsyncStorage.setItem('proximity_enabled', JSON.stringify(value));
+    setAlertsEnabled(value);
+    await AsyncStorage.setItem('proximity_alerts_enabled', JSON.stringify(value));
   };
 
   // Active Journey State
   const [activeJourney, setActiveJourney] = useState<JourneyData | null>(null);
   const [isHydrating, setIsHydrating] = useState(true);
+
+  // ── Network Detection ─────────────────────────────────────────
+  const netInfo = useNetInfo();
+  const networkOffline = netInfo.isConnected === false;
+
+  // ── Snackbar State ────────────────────────────────────────────
+  const [isSnackbarDismissed, setIsSnackbarDismissed] = useState(false);
+  const slideAnim = useRef(new RNAnimated.Value(150)).current;
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Hydration logic
   useEffect(() => {
@@ -92,6 +136,72 @@ export default function Dashboard() {
     hydrate();
   }, []);
 
+  // ── Network Change: Reset snackbar when reconnected ───────────
+  useEffect(() => {
+    if (netInfo.isConnected === true) {
+      setIsSnackbarDismissed(false);
+      if (timerRef.current) clearTimeout(timerRef.current);
+    }
+  }, [netInfo.isConnected]);
+
+  // ── Snackbar Animation & 10s Auto-Dismiss ─────────────────────
+  useEffect(() => {
+    const shouldShow = networkOffline && !isSnackbarDismissed;
+    RNAnimated.spring(slideAnim, {
+      toValue: shouldShow ? 0 : 150,
+      useNativeDriver: true,
+      tension: 50,
+      friction: 8,
+    }).start();
+
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (shouldShow) {
+      timerRef.current = setTimeout(() => setIsSnackbarDismissed(true), 10000);
+    }
+
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [networkOffline, isSnackbarDismissed, slideAnim]);
+
+  // Task 1: The Time Math & State Determination
+  let isUpcoming = false;
+  let timeToGoText = '';
+
+  if (activeJourney && activeJourney.stations && activeJourney.stations.length > 0) {
+    const source = activeJourney.stations[0];
+    if (source.schDeparture) {
+      const departureTime = new Date(source.schDeparture).getTime();
+      const now = new Date().getTime();
+      
+      if (departureTime > now) {
+        isUpcoming = true;
+        const diffMs = departureTime - now;
+        const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+        const diffHours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+        
+        if (diffDays > 0) {
+          timeToGoText = `${diffDays} Day${diffDays > 1 ? 's' : ''} to Go`;
+        } else {
+          timeToGoText = `Departs in ${diffHours} Hour${diffHours > 1 ? 's' : ''}`;
+        }
+      }
+    }
+  } else if (activeJourney) {
+    // Fallback if stations aren't present yet but we have the basic journey data
+    const status = getJourneyStatus(activeJourney);
+    isUpcoming = status === 'UPCOMING';
+    if (isUpcoming) {
+      const now = new Date();
+      const dep = new Date(activeJourney.departs);
+      const diffMs = dep.getTime() - now.getTime();
+      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+      if (diffDays > 0) {
+        timeToGoText = `${diffDays} Day${diffDays > 1 ? 's' : ''} to Go`;
+      } else {
+        timeToGoText = `Departs Today`;
+      }
+    }
+  }
+
   const handleNetworkSwitch = (toOffline: boolean) => {
     setTargetState(toOffline);
     setIsTransitioning(true);
@@ -101,13 +211,38 @@ export default function Dashboard() {
     }, 1200); 
   };
 
-  const getJourneyStatus = (journey: JourneyData) => {
-    const now = new Date();
-    const dep = new Date(journey.departs);
-    const arr = new Date(journey.arrival);
-    if (now < dep) return 'UPCOMING';
-    if (now >= dep && now <= arr) return 'ACTIVE';
-    return 'COMPLETED';
+  // ── Snackbar → Offline Mode Trigger ───────────────────────────
+  const handleSwitchToOffline = () => {
+    setIsSnackbarDismissed(true);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    // Trigger the EXISTING full-screen loading animation
+    setTargetState(true);
+    setIsTransitioning(true);
+    setTimeout(() => {
+      setIsOffline(true);
+      setIsTransitioning(false);
+    }, 1200);
+  };
+
+  // ── Smart Action Interceptor for Utility Cards ────────────────
+  const handleFeaturePress = (
+    routeName: string,
+    requiresLiveInternet: boolean,
+    hasCachedData: boolean
+  ) => {
+    if (networkOffline) {
+      if (requiresLiveInternet && !hasCachedData) {
+        Alert.alert(
+          "Connection Required",
+          "This feature requires an active connection. No offline data is available.",
+          [{ text: "OK", style: "cancel" }]
+        );
+        return;
+      }
+      navigation.navigate(routeName, { isOfflineMode: true });
+    } else {
+      navigation.navigate(routeName, { isOfflineMode: false });
+    }
   };
 
   const handleClearJourney = () => {
@@ -163,15 +298,15 @@ export default function Dashboard() {
             <Text style={styles.headerTitle}>BHARATPATH</Text>
           </View>
           {isOffline ? (
-            <TouchableOpacity style={styles.syncedPill} onPress={() => handleNetworkSwitch(false)} activeOpacity={0.8}>
+            <View style={styles.syncedPill}>
               <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: COLORS.alertRed, marginRight: 6 }} />
               <Text style={styles.syncedText}>OFFLINE</Text>
-            </TouchableOpacity>
+            </View>
           ) : (
-            <TouchableOpacity style={styles.syncedPillOnline} onPress={() => handleNetworkSwitch(true)} activeOpacity={0.8}>
+            <View style={styles.syncedPillOnline}>
               <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#22C55E', marginRight: 6 }} />
               <Text style={styles.syncedTextOnline}>ONLINE</Text>
-            </TouchableOpacity>
+            </View>
           )}
         </View>
 
@@ -214,6 +349,80 @@ export default function Dashboard() {
                     </Text>
                   </View>
                 </View>
+              ) : isUpcoming ? (
+                /* NEW: The Upcoming Journey Card */
+                <View style={styles.sectionContainer}>
+                  <View style={styles.sectionHeader}>
+                    <Text style={styles.sectionTitle}>UPCOMING JOURNEY</Text>
+                    <TouchableOpacity onPress={handleClearJourney}>
+                      <Feather name="trash-2" size={18} color={COLORS.textLightGray} />
+                    </TouchableOpacity>
+                  </View>
+                  <TouchableOpacity activeOpacity={0.9} onPress={() => navigation.navigate('LiveStatus', { pnr: activeJourney.pnr })}>
+                    <View style={styles.upcomingCard}>
+                      {/* Header: Time to Go & Pill */}
+                      <View style={styles.upcomingHeaderRow}>
+                        <View style={styles.timeToGoContainer}>
+                          <MaterialCommunityIcons name="clock-outline" size={24} color="#FF9F43" />
+                          <Text style={styles.timeToGoText}>{timeToGoText}</Text>
+                        </View>
+                        <View style={styles.upcomingPill}>
+                          <Text style={styles.upcomingPillText}>UPCOMING</Text>
+                        </View>
+                      </View>
+                      
+                      {/* Train Name */}
+                      <Text style={styles.trainNumberText}>TRAIN {activeJourney?.trainNumber || activeJourney?.trainNo || '---'}</Text>
+                      <Text style={styles.trainNameText}>{activeJourney?.trainName?.toUpperCase() || '---'}</Text>
+                      
+                      {/* Route Visualizer */}
+                      <View style={styles.routeVisualizer}>
+                        <View style={styles.stationBlock}>
+                          <Text style={styles.stationCode}>{activeJourney?.source?.code || activeJourney?.sourceCode || '--'}</Text>
+                          <Text style={styles.stationName}>{activeJourney?.source?.name?.toUpperCase() || activeJourney?.sourceCity?.toUpperCase() || '--'}</Text>
+                        </View>
+                        <View style={styles.routeLineContainer}>
+                          <View style={styles.routeLine} />
+                          <MaterialCommunityIcons name="train" size={26} color="#1A237E" style={styles.routeTrainIcon} />
+                        </View>
+                        <View style={styles.stationBlock}>
+                          <Text style={styles.stationCode}>{activeJourney?.destination?.code || activeJourney?.destCode || '--'}</Text>
+                          <Text style={styles.stationName}>{activeJourney?.destination?.name?.toUpperCase() || activeJourney?.destCity?.toUpperCase() || '--'}</Text>
+                        </View>
+                      </View>
+                      
+                      <View style={styles.divider} />
+                      
+                      {/* Details Grid */}
+                      <View style={styles.detailsGrid}>
+                        <View style={styles.upcomingGridItem}>
+                          <Text style={styles.gridLabel}>PNR NUMBER</Text>
+                          <Text style={styles.gridValue}>{activeJourney?.pnr || '---'}</Text>
+                        </View>
+                        <View style={styles.upcomingGridItem}>
+                          <Text style={styles.gridLabel}>DEPARTS</Text>
+                          <Text style={styles.gridValue}>
+                            {activeJourney?.source?.schDeparture || activeJourney?.departs 
+                              ? new Date(activeJourney.source?.schDeparture || activeJourney.departs).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) 
+                              : '---'}
+                          </Text>
+                        </View>
+                        <View style={styles.upcomingGridItem}>
+                          <Text style={styles.gridLabel}>PLATFORM</Text>
+                          <Text style={[styles.gridValue, !activeJourney?.platform || activeJourney.platform === 'TBA' ? { color: '#FF9F43' } : {}]}>
+                            {activeJourney?.platform || 'TBA'}
+                          </Text>
+                        </View>
+                        <View style={styles.upcomingGridItem}>
+                          <Text style={styles.gridLabel}>COACH / SEAT</Text>
+                          <Text style={styles.gridValue}>
+                            {activeJourney?.coach ? `${activeJourney.coach} / ${activeJourney.seat}` : 'TBA'}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                  </TouchableOpacity>
+                </View>
               ) : (
                 <OnlineActiveJourneyCard 
                   data={activeJourney} 
@@ -224,11 +433,11 @@ export default function Dashboard() {
               )}
 
               <OnlineUtilitiesSection 
-                onExchangePress={handleSeatExchangePress} 
-                onConnectingPress={() => navigation.navigate('ConnectingJourney')}
-                isProximityEnabled={isProximityEnabled}
-                onToggleProximity={handleToggleProximity}
-                hasJourney={!!activeJourney}
+                onExchangePress={() => handleFeaturePress('SeatExchange', true, false)} 
+                onConnectingPress={() => handleFeaturePress('ConnectingJourney', false, true)}
+                isProximityEnabled={alertsEnabled}
+                onToggleProximity={handleToggleAlerts}
+                hasJourney={activeJourney ? getJourneyStatus(activeJourney) === 'ACTIVE' : false}
               />
             </ScrollView>
           )}
@@ -250,6 +459,22 @@ export default function Dashboard() {
             navigation.navigate('SeatExchange');
          }}
       />
+
+      {/* ── Floating Offline Pill Snackbar ──────────────────────── */}
+      <RNAnimated.View style={[styles.floatingPillSnackbar, { transform: [{ translateY: slideAnim }] }]}>
+        <View style={styles.snackBarTextContainer}>
+          <MaterialCommunityIcons name="wifi-off" size={20} color="#FFF" />
+          <Text style={styles.snackBarText}>Connection lost.</Text>
+        </View>
+        <View style={styles.snackBarActions}>
+          <TouchableOpacity style={styles.snackBarButton} onPress={handleSwitchToOffline}>
+            <Text style={styles.snackBarButtonText}>USE OFFLINE MODE</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.snackBarCloseIcon} onPress={() => setIsSnackbarDismissed(true)}>
+            <MaterialCommunityIcons name="close" size={20} color="#FFF" />
+          </TouchableOpacity>
+        </View>
+      </RNAnimated.View>
     </SafeAreaView>
   );
 }
@@ -589,7 +814,6 @@ const OnlineActiveJourneyCard = memo(({ data, onClear, onRefresh, status }: { da
     }
   }
 
-  const isUpcoming = status === 'UPCOMING';
   const isActive = status === 'ACTIVE';
   const buttonConfig = getButtonConfig(status as any);
 
@@ -608,35 +832,6 @@ const OnlineActiveJourneyCard = memo(({ data, onClear, onRefresh, status }: { da
       pulseAnim.setValue(1);
     }
   }, [isActive]);
-
-  const getDaysToGo = (departs: string) => {
-    try {
-      const now = new Date();
-      const dep = new Date(departs);
-      const diff = dep.getTime() - now.getTime();
-      const days = Math.max(1, Math.ceil(diff / (1000 * 60 * 60 * 24)));
-      return days;
-    } catch (e) {
-      return 1;
-    }
-  };
-
-  const daysToGo = isUpcoming ? getDaysToGo(data.departs) : 0;
-
-  const formatUpcomingDate = (dateStr: string) => {
-    if (!dateStr) return 'TBA';
-    try {
-      const d = new Date(dateStr);
-      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-      const mm = months[d.getMonth()];
-      const dd = d.getDate();
-      const HH = d.getHours().toString().padStart(2, '0');
-      const min = d.getMinutes().toString().padStart(2, '0');
-      return `${dd} ${mm}, ${HH}:${min}`;
-    } catch (e) {
-      return dateStr;
-    }
-  };
 
   const formatTime = (timeStr: string) => {
     if (!timeStr) return '--:--';
@@ -678,155 +873,86 @@ const OnlineActiveJourneyCard = memo(({ data, onClear, onRefresh, status }: { da
       )}
 
       <View style={styles.sectionHeader}>
-        <Text style={styles.sectionTitle}>{isUpcoming ? 'UPCOMING JOURNEY' : 'ACTIVE JOURNEY'}</Text>
+        <Text style={styles.sectionTitle}>ACTIVE JOURNEY</Text>
         <TouchableOpacity onPress={onClear}>
           <Feather name="trash-2" size={18} color={COLORS.textLightGray} />
         </TouchableOpacity>
       </View>
 
-      {isUpcoming ? (
-        <TouchableOpacity activeOpacity={0.92} onPress={handleTrackJourney}>
-          <View style={[styles.cardNoPadding, { borderWidth: 1, borderColor: COLORS.softBlue }]}>
-            <View style={styles.journeyContent}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  <MaterialCommunityIcons name="clock-outline" size={24} color={COLORS.warning} />
-                  <Text style={{ marginLeft: 10, fontSize: 24, fontWeight: '900', color: COLORS.darkCharcoal }}>{daysToGo} Days to Go</Text>
-                </View>
-                <View style={[styles.tagIndigo, { backgroundColor: COLORS.primary }]}>
-                  <Text style={styles.tagIndigoText}>UPCOMING</Text>
-                </View>
+      <TouchableOpacity activeOpacity={0.92} onPress={handleTrackJourney}>
+        <View style={styles.cardNoPadding}>
+          <View style={styles.journeyContent}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <View>
+                <Text style={styles.infoLabel}>TRAIN {data?.trainNo}</Text>
+                <Text style={[styles.journeyTrainName, { letterSpacing: -0.5, fontSize: 18 }]}>{data?.trainName?.toUpperCase()}</Text>
               </View>
-
-              <Text style={[styles.infoLabel, { color: COLORS.slateGray }]}>TRAIN {data?.trainNo}</Text>
-              <Text style={[styles.journeyTrainName, { marginTop: 4, letterSpacing: -0.5, fontSize: 20, color: COLORS.primary }]}>{data?.trainName?.toUpperCase()}</Text>
-
-              <View style={styles.stationMapping}>
-                <View style={styles.stationBlockLeft}>
-                  <Text style={[styles.stationHuge, { color: COLORS.primary }]} adjustsFontSizeToFit numberOfLines={1}>{data?.sourceCode}</Text>
-                  <Text style={[styles.stationCity, { color: COLORS.slateGray }]}>{data?.sourceCity?.toUpperCase()}</Text>
-                </View>
-                <View style={styles.stationConnector}>
-                  <View style={[styles.connectorLine, { backgroundColor: COLORS.primary, opacity: 0.2 }]} />
-                  <View style={[styles.connectorIconWrap, { borderColor: COLORS.primary, opacity: 0.8 }]}>
-                    <MaterialCommunityIcons name="train" size={18} color={COLORS.primary} />
-                  </View>
-                </View>
-                <View style={styles.stationBlockRight}>
-                  <Text style={[styles.stationHuge, { color: COLORS.primary }]} adjustsFontSizeToFit numberOfLines={1}>{data?.destCode}</Text>
-                  <Text style={[styles.stationCity, { color: COLORS.slateGray }]}>{data?.destCity?.toUpperCase()}</Text>
-                </View>
+              <View style={styles.tagOrange}>
+                <Text style={styles.tagOrangeText}>BOARDED</Text>
               </View>
-
-              <View style={{ height: 1, backgroundColor: COLORS.divider, marginVertical: 32, opacity: 0.5 }} />
-
-              <View style={styles.upcomingGrid}>
-                <View style={styles.gridRow}>
-                  <View style={styles.gridItem}>
-                    <Text style={[styles.infoLabel, { color: COLORS.slateGray }]}>PNR NUMBER</Text>
-                    <Text style={[styles.infoValue, { color: COLORS.primary, fontSize: 18 }]}>{data?.pnr}</Text>
-                  </View>
-                  <View style={styles.gridItem}>
-                    <Text style={[styles.infoLabel, { color: COLORS.slateGray }]}>DEPARTS</Text>
-                    <Text style={[styles.infoValue, { color: COLORS.primary, fontSize: 18 }]}>{formatUpcomingDate(data?.departs)}</Text>
-                  </View>
-                </View>
-                <View style={[styles.gridRow, { marginTop: 24 }]}>
-                  <View style={styles.gridItem}>
-                    <Text style={[styles.infoLabel, { color: COLORS.slateGray }]}>PLATFORM</Text>
-                    <Text style={[styles.infoValue, { color: COLORS.warning, fontSize: 18 }]}>{formatPlatform(data?.platform)}</Text>
-                  </View>
-                  <View style={styles.gridItem}>
-                    <Text style={[styles.infoLabel, { color: COLORS.slateGray }]}>COACH / SEAT</Text>
-                    <Text style={[styles.infoValue, { color: COLORS.primary, fontSize: 18 }]}>{data?.coach} / {data?.seat}</Text>
-                  </View>
-                </View>
-              </View>
-
-              {/* VIEW JOURNEY CTA */}
-              <TouchableOpacity style={styles.trackJourneyBtn} onPress={handleTrackJourney} activeOpacity={0.85}>
-                <Feather name={buttonConfig.icon} size={16} color={COLORS.white} />
-                <Text style={styles.trackJourneyBtnText}>{buttonConfig.label}</Text>
-              </TouchableOpacity>
             </View>
-          </View>
-        </TouchableOpacity>
-      ) : (
-        <TouchableOpacity activeOpacity={0.92} onPress={handleTrackJourney}>
-          <View style={styles.cardNoPadding}>
-            <View style={styles.journeyContent}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <View>
-                  <Text style={styles.infoLabel}>TRAIN {data?.trainNo}</Text>
-                  <Text style={[styles.journeyTrainName, { letterSpacing: -0.5, fontSize: 18 }]}>{data?.trainName?.toUpperCase()}</Text>
-                </View>
-                <View style={styles.tagOrange}>
-                  <Text style={styles.tagOrangeText}>BOARDED</Text>
+            <Text style={styles.journeySubText}>{data?.subText || 'FASTEST TRANSIT'}</Text>
+
+            <View style={styles.stationMapping}>
+              <View style={styles.stationBlockLeft}>
+                <Text style={styles.stationHuge} adjustsFontSizeToFit numberOfLines={1}>{data?.sourceCode}</Text>
+                <Text style={styles.stationCity}>{data?.sourceCity?.toUpperCase()}</Text>
+              </View>
+              <View style={styles.stationConnector}>
+                <View style={styles.connectorLine} />
+                <View style={styles.connectorIconWrap}>
+                  <MaterialCommunityIcons name="train" size={18} color={COLORS.textGray} />
                 </View>
               </View>
-              <Text style={styles.journeySubText}>{data?.subText || 'FASTEST TRANSIT'}</Text>
-
-              <View style={styles.stationMapping}>
-                <View style={styles.stationBlockLeft}>
-                  <Text style={styles.stationHuge} adjustsFontSizeToFit numberOfLines={1}>{data?.sourceCode}</Text>
-                  <Text style={styles.stationCity}>{data?.sourceCity?.toUpperCase()}</Text>
-                </View>
-                <View style={styles.stationConnector}>
-                  <View style={styles.connectorLine} />
-                  <View style={styles.connectorIconWrap}>
-                    <MaterialCommunityIcons name="train" size={18} color={COLORS.textGray} />
-                  </View>
-                </View>
-                <View style={styles.stationBlockRight}>
-                  <Text style={styles.stationHuge} adjustsFontSizeToFit numberOfLines={1}>{data?.destCode}</Text>
-                  <Text style={styles.stationCity}>{data?.destCity?.toUpperCase()}</Text>
-                </View>
+              <View style={styles.stationBlockRight}>
+                <Text style={styles.stationHuge} adjustsFontSizeToFit numberOfLines={1}>{data?.destCode}</Text>
+                <Text style={styles.stationCity}>{data?.destCity?.toUpperCase()}</Text>
               </View>
+            </View>
 
-              <View style={styles.journeyInfoRow}>
-                <View style={styles.journeyInfoItem}>
-                  <Text style={styles.infoLabel}>DEPARTS</Text>
-                  <Text style={styles.infoValue}>{formatTime(data?.departs)}</Text>
-                </View>
-                <View style={[styles.journeyInfoItem, {alignItems: 'center'}]}>
-                  <Text style={styles.infoLabel}>PLATFORM</Text>
-                  <Text style={styles.infoValueBlue}>{formatPlatform(data?.platform)}</Text>
-                </View>
-                <View style={[styles.journeyInfoItem, {alignItems: 'flex-end'}]}>
-                  <Text style={styles.infoLabel}>COACH/SEAT</Text>
-                  <Text style={styles.infoValue}>{data?.coach} / {data?.seat}</Text>
-                </View>
+            <View style={styles.journeyInfoRow}>
+              <View style={styles.journeyInfoItem}>
+                <Text style={styles.infoLabel}>DEPARTS</Text>
+                <Text style={styles.infoValue}>{formatTime(data?.departs)}</Text>
               </View>
+              <View style={[styles.journeyInfoItem, {alignItems: 'center'}]}>
+                <Text style={styles.infoLabel}>PLATFORM</Text>
+                <Text style={styles.infoValueBlue}>{formatPlatform(data?.platform)}</Text>
+              </View>
+              <View style={[styles.journeyInfoItem, {alignItems: 'flex-end'}]}>
+                <Text style={styles.infoLabel}>COACH/SEAT</Text>
+                <Text style={styles.infoValue}>{data?.coach} / {data?.seat}</Text>
+              </View>
+            </View>
 
-              <View style={styles.progressSection}>
-                <View style={styles.progressHeader}>
-                  <View style={styles.progressRow}>
-                    <Feather name="map-pin" size={14} color={COLORS.textGray} />
-                    <Text style={styles.progressText}>
-                      {isLoading ? 'Fetching live status...' : currentLocationText}
-                    </Text>
-                  </View>
-                  <Text style={styles.etaText}>
-                    {isLoading ? '--:--' : `ETA ${etaText}`}
+            <View style={styles.progressSection}>
+              <View style={styles.progressHeader}>
+                <View style={styles.progressRow}>
+                  <Feather name="map-pin" size={14} color={COLORS.textGray} />
+                  <Text style={styles.progressText}>
+                    {isLoading ? 'Fetching live status...' : currentLocationText}
                   </Text>
                 </View>
-                <View style={styles.progressBarBg}>
-                  <View style={[styles.progressBarFill, {width: `${progressPct}%`}]} />
-                  <View style={[styles.progressDot, {left: `${progressPct}%`}]} />
-                </View>
+                <Text style={styles.etaText}>
+                  {isLoading ? '--:--' : `ETA ${etaText}`}
+                </Text>
               </View>
-
-              {/* TRACK LIVE CTA with Pulse */}
-              <RNAnimated.View style={{ transform: [{ scale: pulseAnim }], marginTop: 24 }}>
-                <TouchableOpacity style={styles.trackLiveBtn} onPress={handleTrackJourney} activeOpacity={0.85}>
-                  <Feather name={buttonConfig.icon} size={16} color={COLORS.white} />
-                  <Text style={styles.trackLiveBtnText}>{buttonConfig.label}</Text>
-                </TouchableOpacity>
-              </RNAnimated.View>
+              <View style={styles.progressBarBg}>
+                <View style={[styles.progressBarFill, {width: `${progressPct}%`}]} />
+                <View style={[styles.progressDot, {left: `${progressPct}%`}]} />
+              </View>
             </View>
+
+            {/* TRACK LIVE CTA with Pulse */}
+            <RNAnimated.View style={{ transform: [{ scale: pulseAnim }], marginTop: 24 }}>
+              <TouchableOpacity style={styles.trackLiveBtn} onPress={handleTrackJourney} activeOpacity={0.85}>
+                <Feather name={buttonConfig.icon} size={16} color={COLORS.white} />
+                <Text style={styles.trackLiveBtnText}>{buttonConfig.label}</Text>
+              </TouchableOpacity>
+            </RNAnimated.View>
           </View>
-        </TouchableOpacity>
-      )}
+        </View>
+      </TouchableOpacity>
     </View>
   );
 });
@@ -1060,4 +1186,143 @@ const styles = StyleSheet.create({
   suggestionBox: { position: 'absolute', top: 55, left: 0, right: 0, backgroundColor: COLORS.white, borderRadius: 12, elevation: 5, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10, zIndex: 1000, borderWidth: 1, borderColor: COLORS.divider },
   suggestionItem: { paddingVertical: 12, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: COLORS.background },
   suggestionText: { fontSize: 13, fontWeight: '800', color: COLORS.primary },
+
+  // Task 3: Premium Upcoming Styles
+  upcomingCard: { 
+    backgroundColor: '#FFFFFF', 
+    borderRadius: 16, 
+    padding: 20, 
+    borderWidth: 1,
+    borderColor: '#E3F2FD',
+    shadowColor: '#1A237E', 
+    shadowOffset: { width: 0, height: 4 }, 
+    shadowOpacity: 0.08, 
+    shadowRadius: 12, 
+    elevation: 3 
+  },
+  upcomingHeaderRow: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    marginBottom: 24 
+  },
+  timeToGoContainer: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    gap: 12 
+  },
+  timeToGoText: { 
+    fontSize: 24, 
+    fontWeight: '900', 
+    color: '#1A1C1C',
+    letterSpacing: -0.5
+  },
+  upcomingPill: { 
+    backgroundColor: '#1A237E', 
+    paddingVertical: 6, 
+    paddingHorizontal: 12, 
+    borderRadius: 8 
+  },
+  upcomingPillText: { 
+    color: '#FFFFFF', 
+    fontSize: 10, 
+    fontWeight: '800', 
+    letterSpacing: 1,
+    textTransform: 'uppercase'
+  },
+  trainNumberText: { 
+    fontSize: 12, 
+    color: '#1A237E', 
+    fontWeight: '700', 
+    letterSpacing: 1.5, 
+    marginBottom: 4,
+    textTransform: 'uppercase'
+  },
+  trainNameText: { 
+    fontSize: 18, 
+    fontWeight: '900', 
+    color: '#1A237E', 
+    marginBottom: 32,
+    letterSpacing: -0.2,
+    textTransform: 'uppercase'
+  },
+  routeVisualizer: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'space-between', 
+    marginBottom: 32,
+    paddingHorizontal: 4
+  },
+  stationBlock: { 
+    alignItems: 'flex-start', 
+    flex: 1 
+  },
+  stationCode: { 
+    fontSize: 30, 
+    fontWeight: '900', 
+    color: '#1A1C1C',
+    letterSpacing: -1
+  },
+  stationName: { 
+    fontSize: 11, 
+    color: '#64748B', 
+    fontWeight: '600', 
+    marginTop: 6, 
+    textTransform: 'uppercase',
+    letterSpacing: 0.5
+  },
+  routeLineContainer: { 
+    flex: 1.5, 
+    alignItems: 'center', 
+    justifyContent: 'center', 
+    position: 'relative',
+    marginHorizontal: 10
+  },
+  routeLine: { 
+    height: 3, 
+    backgroundColor: '#E3F2FD', 
+    width: '100%', 
+    position: 'absolute',
+    borderRadius: 2
+  },
+  routeTrainIcon: { 
+    backgroundColor: '#FFFFFF', 
+    paddingHorizontal: 8 
+  },
+  divider: { 
+    height: 1, 
+    backgroundColor: '#E3F2FD', 
+    marginBottom: 24 
+  },
+  detailsGrid: { 
+    flexDirection: 'row', 
+    flexWrap: 'wrap',
+    marginTop: 8
+  },
+  upcomingGridItem: { 
+    width: '50%',
+    marginBottom: 20
+  },
+  gridLabel: { 
+    fontSize: 10, 
+    color: '#64748B', 
+    fontWeight: '600', 
+    letterSpacing: 2, 
+    marginBottom: 6,
+    textTransform: 'uppercase'
+  },
+  gridValue: { 
+    fontSize: 14, 
+    fontWeight: '800', 
+    color: '#1A1C1C' 
+  },
+
+  // ── FLOATING SNACKBAR STYLES ──────────────────────────────────
+  floatingPillSnackbar: { position: 'absolute', bottom: 30, alignSelf: 'center', width: '92%', backgroundColor: '#333333', borderRadius: 50, paddingVertical: 12, paddingHorizontal: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 5, elevation: 8, zIndex: 100 },
+  snackBarTextContainer: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  snackBarText: { color: '#FFFFFF', fontSize: 14, fontWeight: '500' },
+  snackBarActions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  snackBarButton: { backgroundColor: '#E53935', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  snackBarButtonText: { color: '#FFFFFF', fontSize: 11, fontWeight: 'bold' },
+  snackBarCloseIcon: { padding: 4 },
 });

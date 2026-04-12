@@ -13,6 +13,8 @@ import {
   LayoutAnimation,
   Animated,
   Switch,
+  Alert,
+  Linking,
 } from 'react-native';
 import { MaterialCommunityIcons, Feather } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -160,16 +162,48 @@ export default function LiveStatusScreen() {
   // Handle hybrid mode persistence
   useEffect(() => {
     const loadBoardedState = async () => {
-      if (!activePnr) return;
-      const val = await AsyncStorage.getItem(`isBoarded_${activePnr}`);
+      const val = await AsyncStorage.getItem('proximity_alerts_enabled');
       if (val) setIsBoarded(val === 'true');
     };
     loadBoardedState();
-  }, [activePnr]);
+  }, []);
 
-  const toggleIsBoarded = async (val: boolean) => {
-    setIsBoarded(val);
-    if (activePnr) await AsyncStorage.setItem(`isBoarded_${activePnr}`, val ? 'true' : 'false');
+  const requestSmartLocationPermission = async () => {
+    const providerStatus = await Location.hasServicesEnabledAsync();
+    if (!providerStatus) {
+      Alert.alert('Location Disabled', 'Please enable Location Services in your phone settings.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Open Settings', onPress: () => Linking.openSettings() }
+      ]);
+      return false;
+    }
+    const { status } = await Location.getForegroundPermissionsAsync();
+    if (status === 'granted') return true;
+    if (status === 'undetermined' || status === 'denied') {
+      const { status: newStatus } = await Location.requestForegroundPermissionsAsync();
+      if (newStatus === 'granted') return true;
+      if (newStatus === 'denied') {
+        Alert.alert(
+          'Permission Blocked',
+          'We need your location for tracking. Please enable it in Settings.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() }
+          ]
+        );
+      }
+      return false;
+    }
+    return false;
+  };
+
+  const toggleIsBoarded = async (value: boolean) => {
+    if (value) {
+      const hasPermission = await requestSmartLocationPermission();
+      if (!hasPermission) return; // Keep switch OFF
+    }
+    setIsBoarded(value);
+    await AsyncStorage.setItem('proximity_alerts_enabled', JSON.stringify(value));
   };
   
   // Proximity State

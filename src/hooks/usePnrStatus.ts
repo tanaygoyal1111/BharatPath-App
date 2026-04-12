@@ -2,11 +2,32 @@ import { useMutation } from '@tanstack/react-query';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import apiClient from '../api/client';
 
+export interface JourneyStation {
+  name: string;
+  code?: string;
+  schArrival?: string;
+  actArrival?: string;
+  schDeparture?: string;
+  actDeparture?: string;
+  platform?: string;
+}
+
 export interface JourneyData {
   pnr: string;
   trainNo: string;
+  trainNumber?: string; // Add alias for trainNo if needed
   trainName: string;
-  sourceCode: string;
+  source: {
+    code: string;
+    name: string;
+    schDeparture?: string;
+  };
+  destination: {
+    code: string;
+    name: string;
+    schArrival?: string;
+  };
+  sourceCode: string; // Keep for backward compatibility
   sourceCity: string;
   destCode: string;
   destCity: string;
@@ -20,9 +41,37 @@ export interface JourneyData {
   currentLocation?: string;
   eta?: string;
   progressPct?: number;
+  stations?: JourneyStation[];
+  delayInMins?: string;
 }
 
 export const STORAGE_KEY = 'active_journey';
+
+/**
+ * Normalizes flat API response into a rich JourneyData object for UI consistency.
+ * This acts as the "Standardized Sync" layer between Backend and Frontend.
+ */
+export const normalizeJourneyData = (raw: any): JourneyData => {
+  return {
+    ...raw,
+    // Add nested source object if missing
+    source: raw.source || {
+      code: raw.sourceCode,
+      name: raw.sourceCity,
+      schDeparture: raw.departs,
+    },
+    // Add nested destination object if missing
+    destination: raw.destination || {
+      code: raw.destCode,
+      name: raw.destCity,
+      schArrival: raw.arrival,
+    },
+    // Ensure trainNumber alias exists for UI components
+    trainNumber: raw.trainNumber || raw.trainNo,
+    // Ensure stations array is at least empty
+    stations: raw.stations || [],
+  };
+};
 
 export const usePnrStatus = (
   onSuccessCallback?: (data: JourneyData) => void,
@@ -37,7 +86,8 @@ export const usePnrStatus = (
       
       try {
         const response = await apiClient.get(`/pnr/${pnr}`);
-        const journey: JourneyData = response.data.data;
+        // Apply Standardized Normalization
+        const journey: JourneyData = normalizeJourneyData(response.data.data);
         
         // Task 2: Implement Offline Resilience
         await AsyncStorage.setItem(`pnr_cache_${pnr}`, JSON.stringify(journey));
@@ -48,7 +98,7 @@ export const usePnrStatus = (
           cachedAt: Date.now()
         };
         await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(storageData));
-        await AsyncStorage.setItem('last_tracked_pnr', pnr); // <-- Set explicitly for LiveStatusScreen fallback
+        await AsyncStorage.setItem('last_tracked_pnr', pnr); 
         
         return journey;
       } catch (error) {
@@ -56,18 +106,19 @@ export const usePnrStatus = (
         const cachedData = await AsyncStorage.getItem(`pnr_cache_${pnr}`);
         if (cachedData) {
           const parsed = JSON.parse(cachedData);
+          // Re-normalize cached data just in case it was stored before sync logic
+          const journey = normalizeJourneyData(parsed);
           
-          // Re-update the active tracking cache as well to match fallback
           const storageData = {
-            journey: parsed,
+            journey,
             cachedAt: Date.now()
           };
           await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(storageData));
-          await AsyncStorage.setItem('last_tracked_pnr', pnr); // <-- Set explicitly for LiveStatusScreen fallback
+          await AsyncStorage.setItem('last_tracked_pnr', pnr); 
           
-          return parsed as JourneyData;
+          return journey;
         }
-        throw new Error("Unable to fetch data. Please ensure you entered a valid 10-digit PNR."); // No cache exists, throw to UI
+        throw new Error("Unable to fetch data. Please ensure you entered a valid 10-digit PNR."); 
       }
     },
     onSuccess: (data) => {

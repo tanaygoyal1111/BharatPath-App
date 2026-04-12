@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Platform, Dimensions, ActivityIndicator, FlatList, StatusBar, Modal } from 'react-native';
+import React, { useState, useMemo } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Platform, Dimensions, ActivityIndicator, FlatList, StatusBar, Modal, TouchableWithoutFeedback } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -45,6 +45,33 @@ export default function TrainListScreen() {
 
   const trains = data || [];
 
+  // ── Sorting State ─────────────────────────────────────────────
+  const [isFilterModalVisible, setIsFilterModalVisible] = useState(false);
+  const [activeFilter, setActiveFilter] = useState<'EARLIEST' | 'FASTEST'>('EARLIEST');
+
+  // ── Sorting Logic ─────────────────────────────────────────────
+  const sortedTrains = useMemo(() => {
+    if (!trains || trains.length === 0) return [];
+
+    const getDepTime = (t: any): string => t.departure?.time || t.depTime || '99:99';
+
+    const getDurationMins = (t: any): number => {
+      const dur = t.duration || '';
+      const hours = parseInt(dur.match(/(\d+)h/)?.[1] || '0', 10);
+      const mins = parseInt(dur.match(/(\d+)m/)?.[1] || '0', 10);
+      return (hours * 60) + mins;
+    };
+
+    return [...trains].sort((a, b) => {
+      if (activeFilter === 'EARLIEST') {
+        return getDepTime(a).localeCompare(getDepTime(b));
+      } else if (activeFilter === 'FASTEST') {
+        return getDurationMins(a) - getDurationMins(b);
+      }
+      return 0;
+    });
+  }, [trains, activeFilter]);
+
   const renderHeader = () => (
     <View style={styles.resultsCardContainer}>
       <View style={styles.resultsContent}>
@@ -52,7 +79,7 @@ export default function TrainListScreen() {
           <Text style={styles.availableServicesLabel}>AVAILABLE SERVICES</Text>
           <Text style={styles.resultsCountText}>{trains.length} TRAINS FOUND</Text>
         </View>
-        <TouchableOpacity style={styles.filterButtonCard}>
+        <TouchableOpacity style={styles.filterButtonCard} onPress={() => setIsFilterModalVisible(true)}>
           <MaterialCommunityIcons name="tune-variant" size={20} color={COLORS.primary} />
         </TouchableOpacity>
       </View>
@@ -110,7 +137,7 @@ export default function TrainListScreen() {
 
       <View style={{ flex: 1, backgroundColor: COLORS.background }}>
         <FlatList
-          data={trains}
+          data={sortedTrains}
           keyExtractor={(item) => String(item.trainNumber)}
           renderItem={({ item }) => <TrainCard train={item} />}
           ListHeaderComponent={renderHeader}
@@ -133,6 +160,43 @@ export default function TrainListScreen() {
           // Refetch will be triggered automatically because selectedDate is in params
         }}
       />
+
+      {/* Sort Filter Bottom Sheet */}
+      <Modal
+        visible={isFilterModalVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setIsFilterModalVisible(false)}
+      >
+        <TouchableOpacity 
+          style={styles.filterModalOverlay} 
+          activeOpacity={1} 
+          onPressOut={() => setIsFilterModalVisible(false)}
+        >
+          <TouchableWithoutFeedback>
+            <View style={styles.bottomSheet}>
+              <View style={styles.sheetHandle} />
+              <Text style={styles.sheetTitle}>Sort Trains By</Text>
+
+              <TouchableOpacity 
+                style={[styles.filterOption, activeFilter === 'EARLIEST' && styles.activeFilterOption]} 
+                onPress={() => { setActiveFilter('EARLIEST'); setIsFilterModalVisible(false); }}
+              >
+                <Text style={[styles.filterOptionText, activeFilter === 'EARLIEST' && styles.activeFilterText]}>Earliest Departure</Text>
+                {activeFilter === 'EARLIEST' && <MaterialCommunityIcons name="check" size={20} color="#0A1128" />}
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={[styles.filterOption, activeFilter === 'FASTEST' && styles.activeFilterOption]} 
+                onPress={() => { setActiveFilter('FASTEST'); setIsFilterModalVisible(false); }}
+              >
+                <Text style={[styles.filterOptionText, activeFilter === 'FASTEST' && styles.activeFilterText]}>Fastest Duration</Text>
+                {activeFilter === 'FASTEST' && <MaterialCommunityIcons name="check" size={20} color="#0A1128" />}
+              </TouchableOpacity>
+            </View>
+          </TouchableWithoutFeedback>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -369,4 +433,14 @@ const styles = StyleSheet.create({
   dayCellSelected: { backgroundColor: COLORS.primary, borderRadius: 12 },
   calendarDayText: { fontSize: 14, fontWeight: '700', color: COLORS.darkCharcoal },
   dayTextSelected: { color: COLORS.white },
+
+  // ── FILTER BOTTOM SHEET STYLES ────────────────────────────────
+  filterModalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0, 0, 0, 0.4)' },
+  bottomSheet: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: 40, shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.1, shadowRadius: 10, elevation: 10 },
+  sheetHandle: { width: 40, height: 4, backgroundColor: '#E0E0E0', borderRadius: 2, alignSelf: 'center', marginBottom: 20 },
+  sheetTitle: { fontSize: 18, fontWeight: 'bold', color: '#0A1128', marginBottom: 16 },
+  filterOption: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
+  activeFilterOption: { backgroundColor: '#F8FAFC', borderRadius: 8, paddingHorizontal: 12, borderBottomWidth: 0 },
+  filterOptionText: { fontSize: 16, color: '#555', fontWeight: '500' },
+  activeFilterText: { color: '#0A1128', fontWeight: 'bold' },
 });

@@ -1,7 +1,9 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Dimensions } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Dimensions, Alert } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
+import { useNetInfo } from '@react-native-community/netinfo';
+import { getCachedJourney } from '../../hooks/usePnrStatus';
 
 const COLORS = {
   primary: '#1A237E', 
@@ -23,7 +25,42 @@ interface BottomNavProps {
 
 export const BottomNav = ({ isOffline = false, activeTab = 'HOME' }: BottomNavProps) => {
   const navigation = useNavigation<any>();
-  
+  const netInfo = useNetInfo();
+
+  // Cache check for SOS Help gating
+  const [hasJourney, setHasJourney] = useState(false);
+  useEffect(() => {
+    getCachedJourney().then(j => setHasJourney(!!j));
+  }, []);
+
+  // ── Tab Interceptors ─────────────────────────────────────────────
+  const handleLiveStatusPress = () => {
+    if (activeTab === 'LIVE_STATUS') return;
+    const isCurrentlyOffline = netInfo.isConnected === false;
+    if (isCurrentlyOffline) {
+      Alert.alert(
+        'Connection Required',
+        'Live Status requires an active internet connection.',
+        [{ text: 'OK', style: 'cancel' }]
+      );
+      return;
+    }
+    navigation.navigate('LiveStatus');
+  };
+
+  const handleSOSPress = () => {
+    if (activeTab === 'SOS_HELP') return;
+    if (!hasJourney) {
+      Alert.alert(
+        'PNR Required',
+        'SOS Help is only available when you have an active journey.',
+        [{ text: 'OK', style: 'cancel' }]
+      );
+      return;
+    }
+    navigation.navigate('Help', { isOffline });
+  };
+
   return (
     <View style={styles.bottomNav}>
       <TouchableOpacity 
@@ -44,7 +81,7 @@ export const BottomNav = ({ isOffline = false, activeTab = 'HOME' }: BottomNavPr
       
       <TouchableOpacity 
         style={styles.navItemWrap} 
-        onPress={() => activeTab !== 'LIVE_STATUS' && navigation.navigate('LiveStatus')}
+        onPress={handleLiveStatusPress}
       >
         <View style={activeTab === 'LIVE_STATUS' ? styles.navHomeActivePillOnline : {}}>
           <MaterialIcons 
@@ -58,7 +95,7 @@ export const BottomNav = ({ isOffline = false, activeTab = 'HOME' }: BottomNavPr
 
       <TouchableOpacity 
         style={styles.navItemWrap} 
-        onPress={() => activeTab !== 'SOS_HELP' && navigation.navigate('Help', { isOffline })}
+        onPress={handleSOSPress}
       >
         <View style={activeTab === 'SOS_HELP' ? styles.navHomeActivePillOnline : {}}>
           <MaterialIcons 

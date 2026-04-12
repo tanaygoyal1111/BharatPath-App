@@ -205,9 +205,6 @@ export default function ProfileScreen() {
           </View>
           <Text style={styles.headerSubtitle}>Manage your account & activity</Text>
         </View>
-        <TouchableOpacity style={styles.headerIcon}>
-          <MaterialCommunityIcons name="bell" size={20} color={COLORS.white} />
-        </TouchableOpacity>
       </View>
 
       <ScrollView 

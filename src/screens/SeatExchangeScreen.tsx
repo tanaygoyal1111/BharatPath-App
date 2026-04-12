@@ -87,9 +87,7 @@ export default function SeatExchangeScreen() {
           <Feather name="arrow-left" size={24} color={COLORS.white} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>SEAT EXCHANGE</Text>
-        <View style={styles.headerRight}>
-          <Feather name="bell" size={20} color={COLORS.white} />
-        </View>
+        <View style={styles.headerRight} />
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>

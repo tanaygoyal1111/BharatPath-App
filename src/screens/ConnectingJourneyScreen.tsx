@@ -3,6 +3,8 @@ import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, StatusB
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Feather, MaterialIcons, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
+import { useNetInfo } from '@react-native-community/netinfo';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { findConnectingRoutes, JourneyOption } from '../utils/bfsEngine';
 import masterMap from '../api/bharatpath_master_map.json';
 
@@ -25,6 +27,8 @@ const COLORS = {
 
 export default function ConnectingJourneyScreen() {
   const navigation = useNavigation();
+  const netInfo = useNetInfo();
+  const isOffline = netInfo.isConnected === false;
   const [isModifying, setIsModifying] = useState(false);
   const [resultsLoaded, setResultsLoaded] = useState(true);
   const [isSearchingLoading, setIsSearchingLoading] = useState(false);
@@ -132,11 +136,13 @@ export default function ConnectingJourneyScreen() {
   // NEW: Expose only sliced window of results
   const visibleResults = sortedAndFilteredResults.slice(0, displayedCount);
 
+  const insets = useSafeAreaInsets();
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor={COLORS.primary} />
       
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
            <Feather name="arrow-left" size={24} color={COLORS.white} />
         </TouchableOpacity>
@@ -146,10 +152,13 @@ export default function ConnectingJourneyScreen() {
         </TouchableOpacity>
       </View>
 
-      {!isOnline && (
-        <View style={styles.offlineBadge}>
-           <MaterialCommunityIcons name="wifi-off" size={12} color={COLORS.secondary} />
-           <Text style={styles.offlineBadgeText}>OFFLINE MODE: USING SCHEDULED TIMES</Text>
+      {/* Network status banner - Ensure this is placed immediately below the top header and above the main ScrollView */}
+      {isOffline && (
+        <View style={styles.alertBanner}>
+          <MaterialCommunityIcons name="alert-circle" size={16} color="#D32F2F" />
+          <Text style={styles.alertBannerText}>
+            OFFLINE: USING SCHEDULED TIMES. LIVE CANCELLATIONS NOT REFLECTED.
+          </Text>
         </View>
       )}
 
@@ -528,7 +537,6 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.bg },
   header: {
     backgroundColor: COLORS.primary,
-    paddingTop: Platform.OS === 'ios' ? 44 : (StatusBar.currentHeight || 24) + 14,
     paddingBottom: 24,
     paddingHorizontal: 16,
     flexDirection: 'row',
@@ -642,4 +650,23 @@ const styles = StyleSheet.create({
   dayCellSelected: { backgroundColor: COLORS.primary, borderRadius: 16 },
   dayText: { fontSize: 14, fontWeight: '700', color: COLORS.primary },
   dayTextSelected: { color: COLORS.white, fontWeight: '900' },
+  alertBanner: {
+    backgroundColor: '#FFEBEE', // High-visibility light red
+    width: '100%', // Ensures it spans the full width of the screen (responsive)
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#FFCDD2',
+  },
+  alertBannerText: {
+    color: '#D32F2F', // Deep, readable red
+    fontSize: 11,
+    fontWeight: 'bold',
+    flexShrink: 1, // Prevents text from pushing off-screen on smaller devices
+    textAlign: 'center',
+  },
 });
