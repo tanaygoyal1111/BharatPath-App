@@ -188,7 +188,7 @@ export default function ProfileScreen() {
   };
 
   const renderSkeletonCard = () => (
-    <View style={[styles.card, { padding: 24, height: 160, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F1F5F9' }]}>
+    <View style={[styles.card, { padding: 24, minHeight: 160, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F1F5F9' }]}>
       <ActivityIndicator size="large" color={COLORS.primary} />
       <Text style={{ marginTop: 12, color: COLORS.textSecondary, fontWeight: '700' }}>Syncing BharatPath Servers...</Text>
     </View>

@@ -644,7 +644,7 @@ const styles = StyleSheet.create({
   calendarMonthText: { fontSize: 16, fontWeight: '900', color: COLORS.primary },
   calendarNav: { flexDirection: 'row' },
   weekDaysRow: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 12 },
-  weekDayText: { width: 32, textAlign: 'center', fontSize: 12, fontWeight: '800', color: COLORS.secondary },
+  weekDayText: { flex: 1, textAlign: 'center', fontSize: 12, fontWeight: '800', color: COLORS.secondary },
   daysGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-start' },
   dayCell: { width: `${100 / 7}%`, aspectRatio: 1, justifyContent: 'center', alignItems: 'center', padding: 2 },
   dayCellSelected: { backgroundColor: COLORS.primary, borderRadius: 16 },

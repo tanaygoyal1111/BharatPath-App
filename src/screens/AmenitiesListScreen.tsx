@@ -197,7 +197,6 @@ const Header = memo(({ title, count }: { title: string; count?: number }) => {
           </View>
         )}
       </View>
-      <View style={{ width: 30 }} />
     </View>
   );
 });

@@ -379,7 +379,7 @@ const styles = StyleSheet.create({
   // Image
   imageContainer: {
     width: '100%',
-    height: 140,
+    flex: 0.25,
     borderRadius: 12,
     overflow: 'hidden',
     marginBottom: 24,
