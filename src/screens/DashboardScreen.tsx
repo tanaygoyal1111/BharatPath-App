@@ -5,7 +5,7 @@ import * as Notifications from 'expo-notifications';
 import * as Location from 'expo-location';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import OfflineDashboard from './OfflineDashboard';
 import { useStationSearch } from '../hooks/useStationSearch';
 import { usePnrStatus, getCachedJourney, clearActiveJourney, JourneyData } from '../hooks/usePnrStatus';
@@ -496,6 +496,7 @@ const HighlightText = ({ text, highlight }: { text: string; highlight: string })
 
 function SearchHubCard({ activeJourney, onJourneyUpdate }: { activeJourney: JourneyData | null, onJourneyUpdate: (j: JourneyData | null) => void }) {
   const navigation = useNavigation<any>();
+  const route = useRoute<any>();
   const [activeTab, setActiveTab] = useState<'station' | 'pnr'>('station');
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date());
@@ -513,10 +514,30 @@ function SearchHubCard({ activeJourney, onJourneyUpdate }: { activeJourney: Jour
   );
 
   // Station Search Hooks
-  const fromSearch = useStationSearch('NDLS');
-  const toSearch = useStationSearch('BSB');
+  const fromSearch = useStationSearch('');
+  const toSearch = useStationSearch('');
 
   const isSearchDisabled = !fromSearch.isValid || !toSearch.isValid;
+
+  // Task 3: State hydration from route back-navigation
+  useEffect(() => {
+    if (route.params?.prevSearch) {
+      const { from, to, date } = route.params.prevSearch;
+      if (from) fromSearch.setQuery(from);
+      if (to) toSearch.setQuery(to);
+      if (date) setSelectedDate(new Date(date));
+
+      // Clean up params so it doesn't re-trigger
+      navigation.setParams({ prevSearch: undefined });
+    }
+  }, [route.params?.prevSearch]);
+
+  useFocusEffect(
+    useCallback(() => {
+      // Do nothing here - just allowing the component to remain in focus ensures
+      // the state isn't re-initialized from scratch on back-navigation.
+    }, [])
+  );
 
   const weekDays = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
   const mockDays = Array.from({length: 31}, (_, i) => i + 1);
@@ -589,14 +610,18 @@ function SearchHubCard({ activeJourney, onJourneyUpdate }: { activeJourney: Jour
                 <View style={styles.inputTextWrapper}>
                   <Text style={styles.inputLabel}>FROM STATION</Text>
                   <TextInput 
-                    style={styles.inputValue}
+                    style={[
+                      styles.inputValue,
+                      !fromSearch.query && { fontSize: 14, fontWeight: '600' }
+                    ]}
                     value={fromSearch.query}
                     onChangeText={(text) => fromSearch.setQuery(text.toUpperCase())}
                     onFocus={() => {
                       fromSearch.setShowSuggestions(true);
                       toSearch.setShowSuggestions(false);
                     }}
-                    placeholder="NDLS"
+                    placeholder="Enter Source"
+                    placeholderTextColor="rgba(148, 163, 184, 0.6)"
                   />
                 </View>
               </View>
@@ -619,14 +644,18 @@ function SearchHubCard({ activeJourney, onJourneyUpdate }: { activeJourney: Jour
                 <View style={[styles.inputTextWrapper, {marginLeft: 14}]}>
                   <Text style={styles.inputLabel}>TO STATION</Text>
                   <TextInput 
-                    style={styles.inputValue}
+                    style={[
+                      styles.inputValue,
+                      !toSearch.query && { fontSize: 14, fontWeight: '600' }
+                    ]}
                     value={toSearch.query}
                     onChangeText={(text) => toSearch.setQuery(text.toUpperCase())}
                     onFocus={() => {
                       toSearch.setShowSuggestions(true);
                       fromSearch.setShowSuggestions(false);
                     }}
-                    placeholder="BSB"
+                    placeholder="Enter Destination"
+                    placeholderTextColor="rgba(148, 163, 184, 0.6)"
                   />
                 </View>
               </View>

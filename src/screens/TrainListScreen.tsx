@@ -120,7 +120,14 @@ export default function TrainListScreen() {
 
       {/* Header - Pixel Match for Image 4 */}
       <View style={[styles.header, { paddingTop: insets.top + 10, paddingBottom: 25 }]}>
-        <TouchableOpacity onPress={() => navigation.navigate('Dashboard')} style={styles.backButton}>
+        <TouchableOpacity 
+          onPress={() => {
+            navigation.navigate('Dashboard', {
+              prevSearch: { from, to, date: dateParam || selectedDate.toISOString() }
+            });
+          }} 
+          style={styles.backButton}
+        >
           <Ionicons name="arrow-back" size={24} color={COLORS.white} />
         </TouchableOpacity>
         <View style={styles.headerInfo}>
