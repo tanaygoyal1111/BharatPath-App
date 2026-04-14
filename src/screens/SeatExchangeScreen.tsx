@@ -7,6 +7,8 @@ import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { supabase } from '../lib/supabase';
 import Animated, { FadeIn, FadeOut, Easing, withTiming, useSharedValue, useAnimatedStyle, withRepeat } from 'react-native-reanimated';
+import apiClient from '../api/client';
+import { normalizeJourneyData } from '../hooks/usePnrStatus';
 
 const COLORS = {
   primary: '#1A237E', 
@@ -45,32 +47,39 @@ const generateTestPair = () => {
 };
 
 export default function SeatExchangeScreen() {
-  const navigation = useNavigation();
+  const navigation = useNavigation<any>();
   const [pnr, setPnr] = useState('');
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const [isVerifying, setIsVerifying] = useState(false);
   const [pnrError, setPnrError] = useState<string | null>(null);
   const [requestId, setRequestId] = useState<string | null>(null);
   const [liveTicketData, setLiveTicketData] = useState<any>(null);
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
 
-  // Task 1: App Restart Bypass — check for existing OPEN request on focus
+  // Task 1: App Restart Bypass & Gatekeeper
   useFocusEffect(
     useCallback(() => {
       let isActive = true;
-      const checkExistingRequest = async () => {
+      const checkAuthAndRequests = async () => {
         try {
-          const { data: { user } } = await supabase.auth.getUser();
-          if (!user) return;
-
+          // 1. Gatekeeper: Check Session First
+          const { data: { session } } = await supabase.auth.getSession();
+          if (!session || !session.user) {
+            if (isActive) setIsAuthenticated(false);
+            return; // Stop execution, they aren't logged in
+          }
+          
+          if (isActive) setIsAuthenticated(true);
+  
+          // 2. Existing Request Check (App Restart Bypass)
           const { data, error } = await supabase
             .from('seat_requests')
             .select('*')
-            .eq('user_id', user.id)
+            .eq('user_id', session.user.id)
             .eq('status', 'OPEN')
             .maybeSingle();
-
+  
           if (isActive && data) {
-            // Bypass PNR screen!
             setLiveTicketData({
               trainNumber: data.train_number,
               journeyDate: data.journey_date,
@@ -80,13 +89,13 @@ export default function SeatExchangeScreen() {
               berthType: data.berth_type
             });
             setRequestId('verified_pnr_state');
-            setActiveRequestId(data.id);
+            setActiveRequestId(data.id); 
           }
         } catch (err) {
-          console.error("Error checking existing request:", err);
+          console.error("Error in Gatekeeper:", err);
         }
       };
-      checkExistingRequest();
+      checkAuthAndRequests();
       return () => { isActive = false; };
     }, [])
   );
@@ -94,43 +103,28 @@ export default function SeatExchangeScreen() {
   // Task 2: Live PNR Verification & Data Locking
   const handleVerifyPnr = async () => {
     setPnrError(null);
-    if (pnr.length !== 10) {
-      setPnrError('Please enter a valid 10-digit PNR.');
-      return;
-    }
+    if (pnr.length !== 10) { setPnrError('Please enter a valid 10-digit PNR.'); return; }
     setIsVerifying(true);
-
+  
     try {
-      // 1. CALL LIVE PNR API HERE (Replacing simulation with actual fetch architecture)
-      // const response = await fetch(`YOUR_PNR_API_ENDPOINT/${pnr}`);
-      // const apiData = await response.json();
-
-      // Simulated Response (Matches your mock_data.json structure):
-      await new Promise(res => setTimeout(res, 1200));
-      const apiData = {
-        trainNumber: "12259",
-        journeyDate: new Date().toISOString().split('T')[0],
-        trainClass: "3A",
-        coach: "B4",
-        seatNo: 22,
-        berthType: "LB",
-        status: "CNF" // Confirmed
-      };
-
-      if (apiData.status !== "CNF") {
-        throw new Error("Seat Exchange is only available for fully Confirmed (CNF) tickets.");
+      // 1. ACTUAL PRODUCTION API CALL
+      const response = await apiClient.get(`/pnr/${pnr}`);
+      const apiData = normalizeJourneyData(response.data.data);
+  
+      if (!apiData || !apiData.trainNo) {
+        throw new Error("Invalid PNR response from server.");
       }
-
-      // 2. Data Adapter -> Lock the UI State
+  
+      // 2. Data Adapter -> Map Real API response to UI
       setLiveTicketData({
-        trainNumber: apiData.trainNumber || (apiData as any).train_number,
-        journeyDate: apiData.journeyDate || (apiData as any).journey_date,
-        trainClass: apiData.trainClass || (apiData as any).train_class,
-        coach: apiData.coach,
-        seatNo: apiData.seatNo || (apiData as any).seat_no,
-        berthType: apiData.berthType || (apiData as any).berth_type
+        trainNumber: apiData.trainNumber || apiData.trainNo,
+        journeyDate: apiData.departs ? new Date(apiData.departs).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+        trainClass: apiData.coach ? apiData.coach.replace(/[0-9]/g, '') : "3A", // e.g. Extracts "B" from "B4"
+        coach: apiData.coach || "TBA",
+        seatNo: apiData.seat || "TBA",
+        berthType: "LB" // Dynamic mapping can be added if backend supports it
       });
-
+  
       setRequestId('verified_pnr_state');
     } catch (err: any) {
       setPnrError(err.message || 'Verification Failed. Check your network or PNR.');
@@ -138,6 +132,28 @@ export default function SeatExchangeScreen() {
       setIsVerifying(false);
     }
   };
+
+  if (isAuthenticated === false) {
+    return (
+      <SafeAreaView style={[styles.container, { justifyContent: 'center', alignItems: 'center', padding: 24 }]}>
+        <MaterialCommunityIcons name="shield-lock-outline" size={80} color="#CBD5E1" style={{ marginBottom: 20 }} />
+        <Text style={{ fontSize: 24, fontWeight: 'bold', color: '#1E293B', textAlign: 'center', marginBottom: 8 }}>
+          Login Required
+        </Text>
+        <Text style={{ fontSize: 16, color: '#64748B', textAlign: 'center', marginBottom: 32, lineHeight: 24 }}>
+          To ensure a safe and fraud-free experience, you must be logged in to exchange seats with verified passengers.
+        </Text>
+        <TouchableOpacity 
+          style={[styles.verifyButton, { width: '100%', paddingVertical: 16, borderRadius: 12, backgroundColor: '#0F172A' }]} 
+          onPress={() => navigation.navigate('Auth')}
+        >
+          <Text style={{ color: '#FFFFFF', fontSize: 16, fontWeight: 'bold', textAlign: 'center' }}>
+            Login / Create Account
+          </Text>
+        </TouchableOpacity>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
@@ -295,22 +311,25 @@ const VerifiedSeatExchangeView = ({ pnr, requestId, ticketData, activeRequestId,
             
             // Bypass edge fetch error if testing without backend setup by wrapping in try
             try {
-               const { data: counterpartRequest } = await supabase
+               const { data: counterpartRequest, error: fetchErr } = await supabase
                  .from('seat_requests')
                  .select('coach, seat_no, berth_type, preference, pnr_hash')
                  .eq('id', counterpartId)
                  .single();
+
+               if (fetchErr || !counterpartRequest) {
+                 console.error("Failed to fetch counterpart request:", fetchErr);
+                 return;
+               }
 
                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
                
                const enrichedMatch = {
                   id: newMatch.id,
                   counterpart_id: counterpartId,
-                  offered_seat: counterpartRequest?.berth_type || "SU",
-                  requested_berth: counterpartRequest?.preference || berth.match(/\(([^)]+)\)/)?.[1] || "LB",
-                  from_pnr_part: counterpartRequest?.coach 
-                     ? `${counterpartRequest.coach}/${counterpartRequest.seat_no}` 
-                     : "B2/45",
+                  offered_seat: counterpartRequest.berth_type,
+                  requested_berth: counterpartRequest.preference,
+                  from_pnr_part: `${counterpartRequest.coach}/${counterpartRequest.seat_no}`,
                };
 
                setMatches(prev => {
@@ -319,7 +338,7 @@ const VerifiedSeatExchangeView = ({ pnr, requestId, ticketData, activeRequestId,
                  return [enrichedMatch, ...prev];
                });
             } catch (e) {
-               console.log("Joined fetch failed, using fallback data.");
+               console.error("Real-time match enrichment failed:", e);
             }
           }
         }
@@ -345,7 +364,7 @@ const VerifiedSeatExchangeView = ({ pnr, requestId, ticketData, activeRequestId,
 
       const prefBerth = berth.match(/\(([^)]+)\)/)?.[1] || berth;
 
-      // Task 4: Use locked ticketData for RPC params
+      // 100% Production Database Call
       const { data, error } = await supabase.rpc('find_seat_matches', {
         p_train_number: ticketData.trainNumber,
         p_journey_date: ticketData.journeyDate,
@@ -357,8 +376,11 @@ const VerifiedSeatExchangeView = ({ pnr, requestId, ticketData, activeRequestId,
 
       if (error) throw error;
 
+      // Strictly set what the database returns (even if empty)
       setMatches(data || []);
     } catch (err: any) {
+      console.error("Error fetching matches from DB:", err);
+      setMatches([]); // Ensure we don't crash the UI on error
       setApiError(err.message || 'Failed to fetch matches.');
     } finally {
       setIsFinding(false);
@@ -482,7 +504,10 @@ const VerifiedSeatExchangeView = ({ pnr, requestId, ticketData, activeRequestId,
 
       // Remove from UI instantly
       setMatches(prev => prev.filter(m => m.id !== otherRequestId));
-      
+
+      // Trigger the Success Screen
+      setSwapStatus('COMPLETED');
+
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (err: any) {
       setApiError(err.message || 'Swap Error occurred.');
@@ -643,9 +668,10 @@ const VerifiedSeatExchangeView = ({ pnr, requestId, ticketData, activeRequestId,
         matches.map((match: any, i) => (
           <MatchRequestCard 
             key={match.id || i}
-            current={match.berth_type || "SU"} 
-            offered={match.preference || "LB"} 
-            from={match.coach ? `${match.coach}/${match.seat_no}` : "B2/45"}
+            // Fallback chain supports both RPC (berth_type) and Real-Time (offered_seat)
+            current={match.berth_type || match.offered_seat || "SU"} 
+            offered={match.preference || match.requested_berth || "LB"} 
+            from={match.from_pnr_part || (match.coach ? `${match.coach}/${match.seat_no}` : "B2/45")}
             onAccept={() => handleAcceptSwap(match.id)}
             onIgnore={() => ignoreMatch(match.id)}
             disabled={isAccepting}
@@ -653,9 +679,9 @@ const VerifiedSeatExchangeView = ({ pnr, requestId, ticketData, activeRequestId,
         ))
       ) : (
         <View style={{ paddingVertical: 32, alignItems: 'center', backgroundColor: COLORS.white, borderRadius: 16, borderWidth: 1, borderColor: COLORS.divider, borderStyle: 'dashed' }}>
-           <Feather name="inbox" size={32} color="#CBD5E1" style={{ marginBottom: 8 }} />
-           <Text style={{ color: '#94A3B8', fontWeight: '600', fontSize: 13 }}>No matches found yet.</Text>
-           <Text style={{ color: '#94A3B8', fontWeight: '500', fontSize: 11, marginTop: 4 }}>We are actively listening for new requests.</Text>
+           <MaterialCommunityIcons name="seat-passenger" size={48} color="#CBD5E1" style={{ marginBottom: 8 }} />
+           <Text style={{ color: '#94A3B8', fontWeight: '600', fontSize: 13 }}>No exact matches found yet.</Text>
+           <Text style={{ color: '#94A3B8', fontWeight: '500', fontSize: 11, marginTop: 4 }}>We'll notify you if someone requests your seat!</Text>
         </View>
       )}
 

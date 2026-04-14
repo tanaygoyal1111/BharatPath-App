@@ -660,25 +660,15 @@ export default function JourneyScreen() {
   // Identify which variable holds the PNR string in this component (e.g., pnr or activePnr)
   const currentPnr = pnr; 
 
-  if (currentPnr === '1234567890') {
-    // 🚀 DEMO MODE: Perfect UI data for presentations
-    arrivalEstimate = '04:40';
-    averageSpeed = '72 km/h';
-    
-  } else if (liveData && liveData.stations && liveData.stations.length > 0) {
+  if (liveData && liveData.stations && liveData.stations.length > 0) {
     // 🌍 PRODUCTION MODE: Dynamic math for real PNRs
     const stations = liveData.stations;
     const source = stations[0];
     const destination = stations[stations.length - 1];
     const currIdx = stations.findIndex((s: any) => s.code === liveData.currentStationCode);
     
-    // Dynamic ETA
-    arrivalEstimate = (destination as any).actArrival || 
-                      (destination as any).schArrival || 
-                      (destination as any).time || 
-                      '--:--';
+    arrivalEstimate = (destination as any).actArrival || (destination as any).schArrival || (destination as any).time || '--:--';
 
-    // Dynamic Average Speed
     if (currIdx > 0) {
       const currentStation = stations[currIdx];
       const distanceCovered = parseInt((currentStation.distance as any) || '0', 10);

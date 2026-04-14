@@ -1,39 +1,30 @@
-// src/hooks/useJourneyData.ts
 import { useQuery } from '@tanstack/react-query';
 import { saveJourneyData, getJourneyData } from '../utils/storage';
-import mockData from '../api/mock_data.json';
-// Import axios as requested in dependencies (will be used broadly in the future)
+import { fetchJourneyData } from '../services/journeyService';
 
-/**
- * Custom hook managing the user's active journey data State.
- * Integrates TanStack Query with MMKV for strict Offline-First capabilities.
- */
-export const useJourneyData = (isOffline: boolean) => {
+export const useJourneyData = (pnr: string | null, isOffline: boolean) => {
   return useQuery({
-    queryKey: ['journey', isOffline],
-    
+    queryKey: ['journey', pnr, isOffline],
     queryFn: async () => {
       if (isOffline) {
         const cachedData = await getJourneyData();
-        return cachedData || mockData; 
+        if (!cachedData) throw new Error("No offline data available");
+        return cachedData; 
       }
+      
+      if (!pnr) throw new Error("PNR is required for live fetch");
 
       try {
-        const data = await new Promise((resolve) => {
-          setTimeout(() => resolve(mockData), 1000);
-        });
-
-        await saveJourneyData(data);
-        return data as typeof mockData;
-
+        const data = await fetchJourneyData(pnr);
+        await saveJourneyData(data as any); 
+        return data;
       } catch (error) {
         const cachedFallback = await getJourneyData();
-        if (cachedFallback) {
-          return cachedFallback;
-        }
+        if (cachedFallback) return cachedFallback;
         throw error;
       }
     },
+    enabled: !!pnr || isOffline,
     staleTime: 1000 * 60 * 5, 
   });
 };

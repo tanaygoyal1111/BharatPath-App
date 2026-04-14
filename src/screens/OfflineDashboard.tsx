@@ -32,7 +32,7 @@ const COLORS = {
 
 export default function OfflineDashboard({ onHelpPress }: { onHelpPress?: () => void }) {
   const navigation = useNavigation<any>();
-  const { data, isLoading } = useJourneyData(true); // Always offline in this dashboard
+  const { data, isLoading } = useJourneyData(null, true); // Always offline in this dashboard
 
   // Proximity Alert State
   const [isProximityEnabled, setIsProximityEnabled] = useState(false);

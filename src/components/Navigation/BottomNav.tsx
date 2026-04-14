@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Dimensions, Alert } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import { useNetInfo } from '@react-native-community/netinfo';
-import { getCachedJourney } from '../../hooks/usePnrStatus';
 
 const COLORS = {
   primary: '#1A237E', 
@@ -27,26 +26,7 @@ export const BottomNav = ({ isOffline = false, activeTab = 'HOME' }: BottomNavPr
   const navigation = useNavigation<any>();
   const netInfo = useNetInfo();
 
-  // Cache check for SOS Help gating
-  const [hasJourney, setHasJourney] = useState(false);
-  useFocusEffect(
-    useCallback(() => {
-      let isActive = true;
 
-      const checkJourneyState = async () => {
-        const j = await getCachedJourney();
-        if (isActive) {
-          setHasJourney(!!j);
-        }
-      };
-
-      checkJourneyState();
-
-      return () => {
-        isActive = false;
-      };
-    }, [activeTab]) // Re-run when tabs change to ensure fresh data
-  );
 
   // ── Tab Interceptors ─────────────────────────────────────────────
   const handleLiveStatusPress = () => {
@@ -65,14 +45,8 @@ export const BottomNav = ({ isOffline = false, activeTab = 'HOME' }: BottomNavPr
 
   const handleSOSPress = () => {
     if (activeTab === 'SOS_HELP') return;
-    if (!hasJourney) {
-      Alert.alert(
-        'PNR Required',
-        'SOS Help is only available when you have an active journey.',
-        [{ text: 'OK', style: 'cancel' }]
-      );
-      return;
-    }
+    
+    // Navigation is now unblocked so users can proactively link their PNR
     navigation.navigate('Help', { isOffline });
   };
 

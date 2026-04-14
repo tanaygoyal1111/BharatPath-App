@@ -29,6 +29,7 @@ export const useTrainSearch = (params: TrainSearchParams) => {
         const response = await apiClient.get(`/trains/search?from=${from}&to=${to}&date=${date}`);
         const trainData = response.data.data as Train[];
         
+        
         await AsyncStorage.setItem(`train_cache_${from}_${to}`, JSON.stringify(trainData));
         return trainData;
       } catch (error) {

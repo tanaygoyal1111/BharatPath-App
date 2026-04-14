@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, StatusBar, Modal, TextInput, Alert, Linking } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, StatusBar, Modal, TextInput, Alert, Linking, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Feather, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { triggerOfficialComplaint, triggerEmergencyCall, IssueType } from '../utils/complaintEngine';
 import { saveJourneyData, getJourneyData } from '../utils/storage';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import apiClient from '../api/client';
+import { normalizeJourneyData } from '../hooks/usePnrStatus';
 
 const COLORS = {
   primary: '#1A237E', // Deep Reliability Indigo
@@ -24,24 +27,103 @@ export default function HelpScreen({ route }: { route: any }) {
   const isOffline = route.params?.isOffline ?? false;
   const [showPnrModal, setShowPnrModal] = useState(false);
   const [pnrInput, setPnrInput] = useState('');
-  const [activePnr, setActivePnr] = useState<string | null>(null);
   const [pendingIssue, setPendingIssue] = useState<IssueType | null>(null);
 
+  const [pnr, setPnr] = useState('');
+  const [isValidatingPnr, setIsValidatingPnr] = useState(false);
+  const [pnrError, setPnrError] = useState<string | null>(null);
+  const [verifiedTicket, setVerifiedTicket] = useState<{
+    trainNo: string; coach: string; seat: string; class: string; status: string;
+  } | null>(null);
+
   useEffect(() => {
-    loadActivePnr();
+    const loadCachedPnr = async () => {
+      try {
+        const cached = await AsyncStorage.getItem('journey_cache');
+        if (cached) {
+          const journey = JSON.parse(cached);
+          const journeyDate = new Date(journey.journeyDate || journey.departs);
+          const today = new Date();
+          today.setHours(0,0,0,0);
+          
+          if (journeyDate >= today && journey.status !== 'CAN') {
+            setPnr(journey.pnr);
+            setVerifiedTicket({
+              trainNo: journey.trainNo || journey.trainNumber,
+              coach: journey.coach || '',
+              seat: journey.seat || journey.seatNo || '',
+              class: journey.class || journey.trainClass || '',
+              status: journey.status || 'CNF'
+            });
+          }
+        }
+      } catch (e) {
+        console.error("Failed to load cached PNR", e);
+      }
+    };
+    loadCachedPnr();
   }, []);
 
-  const loadActivePnr = async () => {
-    const data = await getJourneyData();
-    if (data?.pnr && data.pnr !== 'UNKNOWN') {
-      setActivePnr(data.pnr);
-      setPnrInput(data.pnr);
+  const handleVerifyHelpPnr = async (enteredPnr: string) => {
+    setPnrError(null);
+    if (enteredPnr.length !== 10) { 
+      setPnrError('PNR must be 10 digits.'); 
+      setVerifiedTicket(null);
+      return; 
+    }
+    
+    setIsValidatingPnr(true);
+    try {
+      const response = await apiClient.get(`/pnr/${enteredPnr}`);
+      const apiData = normalizeJourneyData(response.data.data);
+
+      if (!apiData || apiData.status === 'CAN') {
+        throw new Error("This ticket is cancelled or invalid.");
+      }
+
+      const newTicketData = {
+        trainNo: apiData.trainNo || apiData.trainNumber,
+        coach: apiData.coach || 'TBA',
+        seat: apiData.seat || 'TBA',
+        class: apiData.class || apiData.coach?.replace(/[0-9]/g, '') || '',
+        status: apiData.status
+      };
+      
+      setVerifiedTicket(newTicketData);
+
+      setPnr(enteredPnr);
+
+      // SYNC TO COMPLAINT ENGINE: Save the live data to AsyncStorage
+      const existingData = (await getJourneyData()) || {};
+      await saveJourneyData({
+        ...existingData,
+        ...apiData, // Save the normalized API data
+        pnr: enteredPnr,
+        coach: newTicketData.coach,
+        seat: newTicketData.seat,
+        trainNo: newTicketData.trainNo,
+        statusTag: 'ACTIVE' // Prevent the complaint engine from blocking the SOS
+      });
+
+      setShowPnrModal(false);
+
+      // Auto-trigger the complaint if the user tapped a complaint first
+      if (pendingIssue) {
+        setTimeout(() => {
+          triggerOfficialComplaint(pendingIssue, navigation);
+          setPendingIssue(null);
+        }, 500); 
+      }
+    } catch (err: any) {
+      setPnrError(err.message || 'Could not verify PNR. Please check network.');
+      setVerifiedTicket(null);
+    } finally {
+      setIsValidatingPnr(false);
     }
   };
 
   const handleComplaintTap = async (issueType: IssueType) => {
-    const data = await getJourneyData();
-    if (!data || !data.pnr || data.pnr === 'UNKNOWN') {
+    if (!verifiedTicket) {
       setPendingIssue(issueType);
       setShowPnrModal(true);
     } else {
@@ -49,25 +131,8 @@ export default function HelpScreen({ route }: { route: any }) {
     }
   };
 
-  const handlePnrSubmit = async () => {
-    if (pnrInput.length !== 10) {
-      Alert.alert('Invalid PNR', 'Please enter a valid 10-digit PNR.');
-      return;
-    }
-
-    // Securely persist to disk
-    const existingData = await getJourneyData();
-    await saveJourneyData({ ...existingData, pnr: pnrInput });
-    setActivePnr(pnrInput);
-    setShowPnrModal(false);
-    
-    // Auto-trigger the complaint 
-    if (pendingIssue) {
-      setTimeout(() => {
-        triggerOfficialComplaint(pendingIssue, navigation);
-        setPendingIssue(null);
-      }, 500); 
-    }
+  const handlePnrSubmit = () => {
+    handleVerifyHelpPnr(pnrInput);
   };
 
   const handleRailMadadPress = async () => {
@@ -88,6 +153,10 @@ export default function HelpScreen({ route }: { route: any }) {
     }
   };
 
+  const dynamicSubtitle = verifiedTicket && verifiedTicket.coach && verifiedTicket.coach !== 'TBA'
+    ? `Generates SMS with Coach ${verifiedTicket.coach}, Seat ${verifiedTicket.seat} & Location`
+    : `Generates SMS with generic coach & seat details`;
+
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       {/* Header */}
@@ -100,20 +169,36 @@ export default function HelpScreen({ route }: { route: any }) {
       </View>
 
       {/* Active Journey Badge */}
-      {activePnr && (
+      {verifiedTicket ? (
         <View style={styles.activePnrBadge}>
           <View style={styles.pnrInfoRow}>
             <MaterialCommunityIcons name="ticket-confirmation" size={16} color={COLORS.primary} />
-            <Text style={styles.activePnrText}>JOURNEY PNR: {activePnr}</Text>
+            <Text style={styles.activePnrText}>JOURNEY PNR: {pnr}</Text>
           </View>
           <TouchableOpacity 
             style={styles.editPnrBtn} 
             onPress={() => {
-              setPendingIssue(null); // No auto-trigger on manual edit
+              setPendingIssue(null);
               setShowPnrModal(true);
             }}
           >
             <Text style={styles.editPnrText}>EDIT</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <View style={[styles.activePnrBadge, { backgroundColor: '#F1F5F9', borderBottomColor: '#E2E8F0' }]}>
+          <View style={styles.pnrInfoRow}>
+            <MaterialCommunityIcons name="ticket-confirmation" size={16} color={COLORS.textGray} />
+            <Text style={[styles.activePnrText, { color: COLORS.textGray }]}>NO ACTIVE PNR LINKED</Text>
+          </View>
+          <TouchableOpacity 
+            style={[styles.editPnrBtn, { borderColor: '#CBD5E1' }]} 
+            onPress={() => {
+              setPendingIssue(null);
+              setShowPnrModal(true);
+            }}
+          >
+            <Text style={[styles.editPnrText, { color: COLORS.textGray }]}>LINK PNR</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -161,7 +246,7 @@ export default function HelpScreen({ route }: { route: any }) {
           </View>
           <View style={styles.listTextWrap}>
             <Text style={styles.listTitle}>Coach Cleanliness</Text>
-            <Text style={styles.listSubtitle}>Generates SMS with Coach B4, Seat 22 & Location</Text>
+            <Text style={styles.listSubtitle}>{dynamicSubtitle}</Text>
           </View>
           <MaterialCommunityIcons name="message-processing" size={24} color="#94A3B8" />
         </TouchableOpacity>
@@ -172,7 +257,7 @@ export default function HelpScreen({ route }: { route: any }) {
           </View>
           <View style={styles.listTextWrap}>
             <Text style={styles.listTitle}>AC / Electrical Issue</Text>
-            <Text style={styles.listSubtitle}>Generates SMS with Coach B4, Seat 22 & Location</Text>
+            <Text style={styles.listSubtitle}>{dynamicSubtitle}</Text>
           </View>
           <MaterialCommunityIcons name="message-processing" size={24} color="#94A3B8" />
         </TouchableOpacity>
@@ -183,7 +268,7 @@ export default function HelpScreen({ route }: { route: any }) {
           </View>
           <View style={styles.listTextWrap}>
             <Text style={styles.listTitle}>Seat Dispute</Text>
-            <Text style={styles.listSubtitle}>Generates SMS with Coach B4, Seat 22 & Location</Text>
+            <Text style={styles.listSubtitle}>{dynamicSubtitle}</Text>
           </View>
           <MaterialCommunityIcons name="message-processing" size={24} color="#94A3B8" />
         </TouchableOpacity>
@@ -217,6 +302,12 @@ export default function HelpScreen({ route }: { route: any }) {
               To file an official complaint via SMS, we need to verify your 10-digit PNR for the automated IRCTC parsing system.
             </Text>
 
+            {pnrError && (
+              <View style={{ backgroundColor: '#FEF2F2', padding: 12, borderRadius: 8, marginBottom: 16, borderWidth: 1, borderColor: '#FECACA' }}>
+                <Text style={{ color: '#DC2626', fontSize: 12, fontWeight: '600' }}>{pnrError}</Text>
+              </View>
+            )}
+
             <View style={styles.pnrInputWrapper}>
               <MaterialCommunityIcons name="ticket" size={20} color={COLORS.primary} style={styles.pnrIcon} />
               <TextInput
@@ -230,9 +321,19 @@ export default function HelpScreen({ route }: { route: any }) {
               />
             </View>
 
-            <TouchableOpacity style={styles.submitButton} onPress={handlePnrSubmit}>
-              <Text style={styles.submitButtonText}>VERIFY & SEND REPORT</Text>
-              <Feather name="arrow-right" size={20} color={COLORS.white} />
+            <TouchableOpacity 
+              style={[styles.submitButton, (pnrInput.length !== 10 || isValidatingPnr) && { backgroundColor: '#94A3B8' }]} 
+              onPress={handlePnrSubmit}
+              disabled={pnrInput.length !== 10 || isValidatingPnr}
+            >
+              {isValidatingPnr ? (
+                <ActivityIndicator color={COLORS.white} />
+              ) : (
+                <>
+                  <Text style={styles.submitButtonText}>VERIFY & SEND REPORT</Text>
+                  <Feather name="arrow-right" size={20} color={COLORS.white} />
+                </>
+              )}
             </TouchableOpacity>
           </View>
         </View>
