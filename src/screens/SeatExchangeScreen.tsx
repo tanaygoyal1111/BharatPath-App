@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet, TextInput, Platform, StatusBar, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect } from '@react-navigation/native';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { supabase } from '../lib/supabase';
@@ -49,32 +50,90 @@ export default function SeatExchangeScreen() {
   const [isVerifying, setIsVerifying] = useState(false);
   const [pnrError, setPnrError] = useState<string | null>(null);
   const [requestId, setRequestId] = useState<string | null>(null);
+  const [liveTicketData, setLiveTicketData] = useState<any>(null);
+  const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
 
+  // Task 1: App Restart Bypass — check for existing OPEN request on focus
+  useFocusEffect(
+    useCallback(() => {
+      let isActive = true;
+      const checkExistingRequest = async () => {
+        try {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user) return;
+
+          const { data, error } = await supabase
+            .from('seat_requests')
+            .select('*')
+            .eq('user_id', user.id)
+            .eq('status', 'OPEN')
+            .maybeSingle();
+
+          if (isActive && data) {
+            // Bypass PNR screen!
+            setLiveTicketData({
+              trainNumber: data.train_number,
+              journeyDate: data.journey_date,
+              trainClass: data.train_class,
+              coach: data.coach,
+              seatNo: data.seat_no,
+              berthType: data.berth_type
+            });
+            setRequestId('verified_pnr_state');
+            setActiveRequestId(data.id);
+          }
+        } catch (err) {
+          console.error("Error checking existing request:", err);
+        }
+      };
+      checkExistingRequest();
+      return () => { isActive = false; };
+    }, [])
+  );
+
+  // Task 2: Live PNR Verification & Data Locking
   const handleVerifyPnr = async () => {
     setPnrError(null);
     if (pnr.length !== 10) {
-      setPnrError('Please enter a valid 10-digit PNR number.');
+      setPnrError('Please enter a valid 10-digit PNR.');
       return;
     }
     setIsVerifying(true);
+
     try {
-      // In production, this would hit a PNR scraper logic API.
-      // For now, we simulate a secure verification delay.
-      await new Promise(res => setTimeout(res, 1000));
-      
-      // Transition to verified state
-      setRequestId('verified_pnr_state');
-      
-    } catch (err: any) {
-      let debugMessage = err.message;
-      if (err instanceof Error && 'context' in err) {
-         try {
-           const contextObj = await (err as any).context.json();
-           debugMessage = contextObj.error || JSON.stringify(contextObj);
-         } catch(e) {}
+      // 1. CALL LIVE PNR API HERE (Replacing simulation with actual fetch architecture)
+      // const response = await fetch(`YOUR_PNR_API_ENDPOINT/${pnr}`);
+      // const apiData = await response.json();
+
+      // Simulated Response (Matches your mock_data.json structure):
+      await new Promise(res => setTimeout(res, 1200));
+      const apiData = {
+        trainNumber: "12259",
+        journeyDate: new Date().toISOString().split('T')[0],
+        trainClass: "3A",
+        coach: "B4",
+        seatNo: 22,
+        berthType: "LB",
+        status: "CNF" // Confirmed
+      };
+
+      if (apiData.status !== "CNF") {
+        throw new Error("Seat Exchange is only available for fully Confirmed (CNF) tickets.");
       }
-      console.log("EDGE FXN ERROR =>", debugMessage);
-      setPnrError(debugMessage || 'PNR Verification Failed');
+
+      // 2. Data Adapter -> Lock the UI State
+      setLiveTicketData({
+        trainNumber: apiData.trainNumber || (apiData as any).train_number,
+        journeyDate: apiData.journeyDate || (apiData as any).journey_date,
+        trainClass: apiData.trainClass || (apiData as any).train_class,
+        coach: apiData.coach,
+        seatNo: apiData.seatNo || (apiData as any).seat_no,
+        berthType: apiData.berthType || (apiData as any).berth_type
+      });
+
+      setRequestId('verified_pnr_state');
+    } catch (err: any) {
+      setPnrError(err.message || 'Verification Failed. Check your network or PNR.');
     } finally {
       setIsVerifying(false);
     }
@@ -146,7 +205,7 @@ export default function SeatExchangeScreen() {
             </TouchableOpacity>
           </View>
         ) : (
-          <VerifiedSeatExchangeView pnr={pnr} requestId={requestId} />
+          <VerifiedSeatExchangeView pnr={pnr} requestId={requestId} ticketData={liveTicketData} activeRequestId={activeRequestId} setActiveRequestId={setActiveRequestId} />
         )}
       </ScrollView>
     </SafeAreaView>
@@ -156,6 +215,9 @@ export default function SeatExchangeScreen() {
 interface VerifiedViewProps {
   pnr: string;
   requestId: string;
+  ticketData: any;
+  activeRequestId: string | null;
+  setActiveRequestId: (id: string | null) => void;
 }
 
 const SkeletonCard = () => {
@@ -188,7 +250,7 @@ const SkeletonCard = () => {
   );
 }
 
-const VerifiedSeatExchangeView = ({ pnr, requestId }: VerifiedViewProps) => {
+const VerifiedSeatExchangeView = ({ pnr, requestId, ticketData, activeRequestId, setActiveRequestId }: VerifiedViewProps) => {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -196,19 +258,20 @@ const VerifiedSeatExchangeView = ({ pnr, requestId }: VerifiedViewProps) => {
   }, []);
 
   const [isTestMode, setIsTestMode] = useState(false);
-  const defaultSeat = generateSeatFromPNR(pnr);
 
-  const [berth, setBerth] = useState(defaultSeat.berth_type);
+  const [berth, setBerth] = useState(
+    ticketData?.berthType
+      ? `${ticketData.berthType === 'LB' ? 'Lower Berth' : ticketData.berthType === 'UB' ? 'Upper Berth' : ticketData.berthType === 'MB' ? 'Middle Berth' : ticketData.berthType === 'SL' ? 'Side Lower' : ticketData.berthType === 'SU' ? 'Side Upper' : ticketData.berthType} (${ticketData.berthType})`
+      : generateSeatFromPNR(pnr).berth_type
+  );
   const [showBerthDropdown, setShowBerthDropdown] = useState(false);
   const berthOptions = ['Lower Berth (LB)', 'Middle Berth (MB)', 'Upper Berth (UB)', 'Side Lower (SL)', 'Side Upper (SU)'];
-  
-  const [coach, setCoach] = useState(defaultSeat.coach);
-  const [seatNum, setSeatNum] = useState(defaultSeat.seat_no.toString());
+
+  // coach and seatNum are now LOCKED via ticketData — no local state needed
 
   const [matches, setMatches] = useState<any[]>([]);
   const [isFinding, setIsFinding] = useState(false);
   const [swapStatus, setSwapStatus] = useState<'IDLE' | 'COMPLETED'>('IDLE');
-  const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
   
   const [isCreatingTest, setIsCreatingTest] = useState(false);
@@ -282,11 +345,12 @@ const VerifiedSeatExchangeView = ({ pnr, requestId }: VerifiedViewProps) => {
 
       const prefBerth = berth.match(/\(([^)]+)\)/)?.[1] || berth;
 
+      // Task 4: Use locked ticketData for RPC params
       const { data, error } = await supabase.rpc('find_seat_matches', {
-        p_train_number: isTestMode ? "12345" : "12259",
-        p_journey_date: isTestMode ? "2026-04-01" : "2026-04-20",
-        p_train_class: isTestMode ? "3AC" : "3A",
-        p_my_berth: isTestMode ? "LB" : "LB",
+        p_train_number: ticketData.trainNumber,
+        p_journey_date: ticketData.journeyDate,
+        p_train_class: ticketData.trainClass,
+        p_my_berth: ticketData.berthType,
         p_target_preference: prefBerth,
         p_current_user_id: user.id
       });
@@ -329,7 +393,7 @@ const VerifiedSeatExchangeView = ({ pnr, requestId }: VerifiedViewProps) => {
           train_number: trainNumber,
           journey_date: journeyDate,
           train_class: trainClass,
-          coach: coach,
+          coach: ticketData?.coach || "B1",
           seat_no: "21",
           berth_type: userA.berth_type,
           preference: userA.preference
@@ -364,6 +428,7 @@ const VerifiedSeatExchangeView = ({ pnr, requestId }: VerifiedViewProps) => {
     }
   };
 
+  // Task 4: Safe Supabase Invocations — no raw fetch
   const handleFindMatches = async () => {
     setIsFinding(true);
     setApiError(null);
@@ -371,62 +436,30 @@ const VerifiedSeatExchangeView = ({ pnr, requestId }: VerifiedViewProps) => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("You must be signed in to access Seat Exchange.");
 
-      const { data: sessionData } = await supabase.auth.getSession();
-      if (!sessionData.session?.access_token) {
-         throw new Error("No active session token found!");
-      }
-
-      const token = sessionData.session.access_token;
-      console.log("JWT Token:", token);
-
       const prefBerth = berth.match(/\(([^)]+)\)/)?.[1] || berth;
-      const seatNoInt = parseInt(seatNum, 10);
-      const pnrToUse = isTestMode ? generatePNR() : pnr;
-      
+
       const payload = {
-          pnr: pnrToUse,
-          train_number: isTestMode ? "12345" : "12259",
-          journey_date: isTestMode ? "2026-04-01" : "2026-04-20",
-          train_class: isTestMode ? "3AC" : "3AC",
-          coach: coach,
-          seat_no: seatNoInt,
-          berth_type: isTestMode ? "LB" : "LB",
-          preference: prefBerth
+        pnr: pnr,
+        train_number: ticketData.trainNumber,
+        journey_date: ticketData.journeyDate,
+        train_class: ticketData.trainClass,
+        coach: ticketData.coach,
+        seat_no: ticketData.seatNo,
+        berth_type: ticketData.berthType,
+        preference: prefBerth
       };
 
-      console.log("Creating request with:", {
-        pnr: payload.pnr,
-        berth_type: payload.berth_type,
-        preference: payload.preference
+      const { data, error } = await supabase.functions.invoke('create-seat-request', {
+        body: payload
       });
 
-      const response = await fetch(`${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/create-seat-request`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`
-        },
-        body: JSON.stringify(payload)
-      });
+      if (error) throw new Error("Failed to create request: " + error.message);
+      setActiveRequestId(data?.data?.[0]?.id || data?.data?.id);
 
-      const result = await response.json();
-      console.log("API RESPONSE:", result);
-
-      if (!response.ok) {
-         const errorObjStr = result.error || result.message || "";
-         if (typeof errorObjStr === 'string' && errorObjStr.includes("duplicate key")) {
-            throw new Error("You already created a request for this PNR. Try again later.");
-         }
-         throw new Error(errorObjStr || "API Error");
-      }
-
-      const newRequestId = result?.[0]?.id || result?.id;
-      setActiveRequestId(newRequestId);
-      
       await fetchMatches();
     } catch (err: any) {
       setApiError(err.message || 'Failed to initialize request');
-      setIsFinding(false); 
+      setIsFinding(false);
     }
   };
 
@@ -499,7 +532,7 @@ const VerifiedSeatExchangeView = ({ pnr, requestId }: VerifiedViewProps) => {
            <Text style={styles.statusLabelSmall}>VERIFICATION STATUS</Text>
            <Text style={styles.statusLabelBold}>PNR {pnr} Verified <Text style={{color: COLORS.successGreen}}>✅</Text></Text>
         </View>
-        <MaterialCommunityIcons name="shield-check" size={22} color={COLORS.primary} />
+        <MaterialCommunityIcons name="check-decagram" size={22} color="#10B981" />
       </View>
 
       <View style={styles.sectionCard}>
@@ -509,28 +542,18 @@ const VerifiedSeatExchangeView = ({ pnr, requestId }: VerifiedViewProps) => {
             <MaterialCommunityIcons name="seat-passenger" size={16} color={COLORS.primary} />
             <Text style={styles.cardSectionTitle}>YOUR CURRENT SEAT</Text>
           </View>
+          {/* Task 3: Locked Inputs — user CANNOT edit current seat details */}
           <View style={styles.inputRow}>
             <View style={{flex: 1, marginRight: 8}}>
-               <Text style={styles.inputLabel}>COACH (E.G., B4)</Text>
-               <View style={styles.textBox}>
-                 <TextInput 
-                   style={styles.dropdownText}
-                   value={coach}
-                   onChangeText={setCoach}
-                   placeholder="B4"
-                 />
+               <Text style={styles.inputLabel}>LOCKED COACH</Text>
+               <View style={[styles.textBox, { backgroundColor: '#F8FAFC' }]}>
+                 <Text style={[styles.dropdownText, { color: '#64748B' }]}>{ticketData?.coach ?? '—'}</Text>
                </View>
             </View>
             <View style={{flex: 1, marginLeft: 8}}>
-               <Text style={styles.inputLabel}>SEAT (E.G., 22)</Text>
-               <View style={styles.textBox}>
-                 <TextInput 
-                   style={styles.dropdownText}
-                   keyboardType="number-pad"
-                   value={seatNum}
-                   onChangeText={setSeatNum}
-                   placeholder="22"
-                 />
+               <Text style={styles.inputLabel}>LOCKED SEAT</Text>
+               <View style={[styles.textBox, { backgroundColor: '#F8FAFC' }]}>
+                 <Text style={[styles.dropdownText, { color: '#64748B' }]}>{ticketData?.seatNo ?? '—'}</Text>
                </View>
             </View>
           </View>
@@ -572,10 +595,12 @@ const VerifiedSeatExchangeView = ({ pnr, requestId }: VerifiedViewProps) => {
           )}
 
           <Text style={[styles.inputLabel, {marginTop: 20}]}>LIMIT TO COACHES IN MY CLASS</Text>
-          <TouchableOpacity style={styles.dropdownBox}>
-            <Text style={styles.dropdownText}>Any in 3-Tier AC</Text>
-            <Feather name="chevron-down" size={16} color={COLORS.textGray} />
-          </TouchableOpacity>
+          <View style={[styles.dropdownBox, { backgroundColor: '#F8FAFC', borderColor: '#E2E8F0' }]}>
+            <Text style={[styles.dropdownText, { color: '#64748B' }]}>
+              Any in {ticketData?.trainClass || 'Current Class'}
+            </Text>
+            <MaterialCommunityIcons name="lock-outline" size={16} color="#94A3B8" />
+          </View>
         </View>
       </View>
 

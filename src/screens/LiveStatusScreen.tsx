@@ -29,7 +29,7 @@ import { fetchJourneyData, JourneyAPIData, JourneyStation } from '../services/jo
 type JourneyState = 'LOADING' | 'UPCOMING' | 'ACTIVE' | 'NOT_TRAVELLING' | 'COMPLETED' | 'GPS_OFF';
 type Confidence = 'LOW' | 'MEDIUM' | 'HIGH';
 
-const TEST_MODE = true;
+const TEST_MODE = false;
 
 const { width } = Dimensions.get('window');
 
@@ -103,6 +103,30 @@ function getConfidence({ isMoving, isNearRoute, accuracy }: { isMoving: boolean;
   return 'MEDIUM';
 }
 
+// --- SMOOTH TRAIN DOT COMPONENT ---
+const SmoothTrainDot = ({ targetOffset }: { targetOffset: number }) => {
+  const translateYAnim = useRef(new Animated.Value(targetOffset)).current;
+
+  useEffect(() => {
+    Animated.timing(translateYAnim, {
+      toValue: targetOffset,
+      duration: 1500,
+      useNativeDriver: true,
+    }).start();
+  }, [targetOffset, translateYAnim]);
+
+  return (
+    <Animated.View
+      style={[
+        styles.currentDot,
+        { position: 'absolute', top: 0, transform: [{ translateY: translateYAnim }], zIndex: 10 },
+      ]}
+    >
+      <MaterialCommunityIcons name="train" size={16} color="#FFFFFF" />
+    </Animated.View>
+  );
+};
+
 // --- MAIN COMPONENT ---
 export default function LiveStatusScreen() {
   const navigation = useNavigation<any>();
@@ -114,15 +138,15 @@ export default function LiveStatusScreen() {
     if (!activePnr) {
       const loadStoredPnr = async () => {
         const stored = await AsyncStorage.getItem('last_tracked_pnr');
-        if (stored) {
+        if (stored && stored !== 'null' && stored !== 'undefined') {
           setActivePnr(stored);
         } else {
-          // Task 3: Secondary fallback to extract PNR from journey_cache
+          // Secondary fallback to extract PNR from journey_cache
           const cachedJourneyStr = await AsyncStorage.getItem('journey_cache');
-          if (cachedJourneyStr) {
+          if (cachedJourneyStr && cachedJourneyStr !== 'null') {
             try {
               const parsedJourney = JSON.parse(cachedJourneyStr);
-              if (parsedJourney?.pnr) {
+              if (parsedJourney?.pnr && parsedJourney.pnr !== 'null') {
                 setActivePnr(parsedJourney.pnr);
               }
             } catch (e) {
@@ -209,6 +233,39 @@ export default function LiveStatusScreen() {
   // Proximity State
   const [isProximityEnabled, setIsProximityEnabled] = useState(false);
   const [alertTriggered, setAlertTriggered] = useState(false);
+
+  useEffect(() => {
+    if (!isBoarded || !isProximityEnabled || !journey?.endTime || !journey?.startTime) return;
+
+    const scheduleSmartAlerts = async () => {
+      await Notifications.cancelAllScheduledNotificationsAsync();
+      const now = Date.now();
+      const oneHourBeforeMs = journey.endTime - (60 * 60 * 1000);
+      const halfWayMs = journey.startTime + ((journey.endTime - journey.startTime) / 2);
+
+      if (oneHourBeforeMs > now) {
+        await Notifications.scheduleNotificationAsync({
+          content: { 
+            title: 'Wakey Wakey! ⏰🚉', 
+            body: 'Your station arrives in exactly 60 minutes! Pack your chargers, check under the seat, and get ready.', 
+            sound: true 
+          },
+          trigger: { seconds: Math.floor((oneHourBeforeMs - now) / 1000) } as any,
+        });
+      }
+      if (halfWayMs > now) {
+        await Notifications.scheduleNotificationAsync({
+          content: { 
+            title: "Ooooh, we're halfway there! 🎶", 
+            body: "You've officially conquered 50% of your journey. Perfect time for a quick chai break! ☕" 
+          },
+          trigger: { seconds: Math.floor((halfWayMs - now) / 1000) } as any,
+        });
+      }
+    };
+    scheduleSmartAlerts();
+    return () => { Notifications.cancelAllScheduledNotificationsAsync(); };
+  }, [isBoarded, isProximityEnabled, journey]);
   
   const scrollRef = useRef<ScrollView>(null);
   const lastUpdateRef = useRef<number>(0);
@@ -228,14 +285,15 @@ export default function LiveStatusScreen() {
   }, []);
 
   // 1. TanStack Query
-  const { data: fetchedJourney, isLoading, error } = useQuery({
+  const { data: fetchedJourney, isLoading, isError, error } = useQuery({
     queryKey: ['journey', activePnr],
     queryFn: () => fetchJourneyData(activePnr!),
-    enabled: !!activePnr,
+    // Strictly require a valid string to even attempt fetching
+    enabled: !!activePnr && activePnr !== 'null' && activePnr !== 'undefined',
     staleTime: 60000, 
     refetchOnWindowFocus: false,
     refetchInterval: 60000,
-    retry: 2,
+    retry: 1, // Reduce to 1 retry so it fails fast and shows the error UI
     retryDelay: 1000,
   });
 
@@ -271,7 +329,7 @@ export default function LiveStatusScreen() {
         if (aTriggered) setAlertTriggered(true);
       }
 
-      const pEnabled = await AsyncStorage.getItem('proximity_enabled');
+      const pEnabled = await AsyncStorage.getItem('proximity_alerts_enabled');
       if (pEnabled) setIsProximityEnabled(JSON.parse(pEnabled));
     };
     setupProximity();
@@ -342,13 +400,25 @@ export default function LiveStatusScreen() {
         // Hydrate silently if needed, but wait for fresh update
       }
 
-      if (TEST_MODE) return; // Prevent real tracking in test mode
+      const now = Date.now();
+      const timeToDest = journey?.endTime ? (journey.endTime - now) : 0;
+
+      let dynamicTimeInterval = 5000; 
+      let dynamicDistanceInterval = 200;
+
+      if (timeToDest > 2 * 60 * 60 * 1000) {
+        dynamicTimeInterval = 120000; // > 2hrs: Poll every 2 mins
+        dynamicDistanceInterval = 1000;
+      } else if (timeToDest > 30 * 60 * 1000) {
+        dynamicTimeInterval = 30000;  // > 30mins: Poll every 30s
+        dynamicDistanceInterval = 500;
+      }
 
       sub = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.Balanced,
-          distanceInterval: 200, // meters
-          timeInterval: 5000,
+          distanceInterval: dynamicDistanceInterval, 
+          timeInterval: dynamicTimeInterval,
         },
         (location) => handleLocationUpdate(location)
       );
@@ -404,17 +474,15 @@ export default function LiveStatusScreen() {
       const isNearRoute = minRouteDist < 5; // km threshold
 
       if (!isNearRoute || !isMoving) {
-        if (!TEST_MODE) {
-          setJState('NOT_TRAVELLING');
-          return;
-        }
+        setJState('NOT_TRAVELLING');
+        return;
       }
 
       setJState('ACTIVE');
 
       // Confidence System
       const locAcc = location.coords.accuracy || Infinity;
-      const conf = getConfidence({ isMoving: isMoving || TEST_MODE, isNearRoute, accuracy: locAcc });
+      const conf = getConfidence({ isMoving, isNearRoute, accuracy: locAcc });
       setConfidence(conf);
 
       const distToNextNode = getDistance(
@@ -466,43 +534,15 @@ export default function LiveStatusScreen() {
 
   // 5. Auto Scroll removed for manual control via FAB
 
-  // 6. Test Mode Simulator Component
-  useEffect(() => {
-    if (!TEST_MODE || !journey) return;
-    setJState('ACTIVE'); // force active
 
-    let mockIndex = 0;
-    const interval = setInterval(() => {
-      const stations = journey.stations;
-      if (!stations || mockIndex >= stations.length) {
-        clearInterval(interval);
-        setJState('COMPLETED');
-        return;
-      }
-      const st = stations[mockIndex];
-      // Emit mock location frame
-      handleLocationUpdate({
-        coords: {
-          latitude: st.lat,
-          longitude: st.lng,
-          speed: 30, // 30 m/s (~108 km/h) = isMoving true
-          accuracy: 10,
-          altitude: 0,
-          heading: 0,
-          altitudeAccuracy: 0,
-        },
-        timestamp: Date.now(),
-      } as Location.LocationObject);
-      
-      mockIndex++;
-    }, 4000); // jump stations every 4 seconds
-
-    return () => clearInterval(interval);
-  }, [TEST_MODE, journey, handleLocationUpdate]);
 
   // --- RENDERS ---
   if (isInitializing) return <SafeAreaView style={styles.safeArea} />; // Blank while checking storage
   if (!activePnr) return <EmptyState text="Enter PNR to start tracking" onBack={() => navigation.navigate('Dashboard')} />;
+
+  if (isError) {
+    return <EmptyState text="Could not fetch journey details. Please check your network or enter a valid PNR." onBack={() => navigation.goBack()} />;
+  }
 
   if (isLoading) {
     return (
@@ -551,11 +591,7 @@ export default function LiveStatusScreen() {
             <Feather name="arrow-left" size={24} color={COLORS.white} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>BHARATPATH LIVE</Text>
-          <View style={styles.delayPill}>
-            <Text style={[styles.delayPillText, { color: COLORS.white }]}>
-               {confidence} CONFIDENCE
-            </Text>
-          </View>
+          <View style={{ width: 32 }} />
         </View>
 
         <View style={styles.trainInfoRow}>
@@ -632,8 +668,16 @@ export default function LiveStatusScreen() {
               let segmentHeight = MIN_HEIGHT;
               if (!isLast) {
                 const nextStation = stations[index + 1];
-                const physicalDist = nextStation.distance - station.distance; // Assuming cumulated distances in km
-                segmentHeight = normalize(physicalDist, MIN_HEIGHT, MAX_HEIGHT);
+                if (typeof station.distance === 'number' && typeof nextStation.distance === 'number') {
+                  const physicalDist = nextStation.distance - station.distance;
+                  segmentHeight = normalize(physicalDist, MIN_HEIGHT, MAX_HEIGHT);
+                } else if (station.time && nextStation.schArrival) {
+                  const parseMins = (t: string) => { const [h, m] = t.split(':').map(Number); return isNaN(h) || isNaN(m) ? 0 : (h * 60) + m; };
+                  let diffMins = parseMins(nextStation.schArrival) - parseMins(station.time);
+                  if (diffMins < 0) diffMins += 24 * 60;
+                  const clampedTime = Math.max(10, Math.min(180, diffMins));
+                  segmentHeight = MIN_HEIGHT + ((clampedTime - 10) / (180 - 10)) * (MAX_HEIGHT - MIN_HEIGHT);
+                }
               }
 
               // Calculate Train Positioning
@@ -665,9 +709,7 @@ export default function LiveStatusScreen() {
                     )}
 
                     {isActiveNode && !isLast && (
-                      <Animated.View style={[styles.currentDot, { position: 'absolute', top: Math.max(0, trainTopOffset), zIndex: 10 }]}>
-                        <MaterialCommunityIcons name="train" size={16} color={COLORS.white} />
-                      </Animated.View>
+                      <SmoothTrainDot targetOffset={trainTopOffset} />
                     )}
 
                     <View style={styles.dotContainer}>

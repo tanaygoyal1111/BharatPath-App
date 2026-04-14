@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Dimensions, Alert } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useNetInfo } from '@react-native-community/netinfo';
 import { getCachedJourney } from '../../hooks/usePnrStatus';
 
@@ -29,9 +29,24 @@ export const BottomNav = ({ isOffline = false, activeTab = 'HOME' }: BottomNavPr
 
   // Cache check for SOS Help gating
   const [hasJourney, setHasJourney] = useState(false);
-  useEffect(() => {
-    getCachedJourney().then(j => setHasJourney(!!j));
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      let isActive = true;
+
+      const checkJourneyState = async () => {
+        const j = await getCachedJourney();
+        if (isActive) {
+          setHasJourney(!!j);
+        }
+      };
+
+      checkJourneyState();
+
+      return () => {
+        isActive = false;
+      };
+    }, [activeTab]) // Re-run when tabs change to ensure fresh data
+  );
 
   // ── Tab Interceptors ─────────────────────────────────────────────
   const handleLiveStatusPress = () => {
