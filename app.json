@@ -17,7 +17,9 @@
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "We use your location to track your train journey and provide live updates.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "We use your location to enable proximity alerts during your journey.",
-        "LSApplicationQueriesSchemes": ["comgooglemaps"]
+        "LSApplicationQueriesSchemes": [
+          "comgooglemaps"
+        ]
       }
     },
     "android": {
@@ -32,6 +34,11 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "c9e34e91-e4df-4ffc-8bf7-62f720e86c25"
+      }
     }
   }
 }
