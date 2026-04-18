@@ -1,0 +1,10 @@
+App.tsx(17,37): error TS2322: Type 'Promise<{ shouldShowAlert: true; shouldPlaySound: true; shouldSetBadge: false; }>' is not assignable to type 'Promise<NotificationBehavior>'.
+  Type '{ shouldShowAlert: true; shouldPlaySound: true; shouldSetBadge: false; }' is missing the following properties from type 'NotificationBehavior': shouldShowBanner, shouldShowList
+src/screens/HelpScreen.tsx(80,31): error TS2339: Property 'status' does not exist on type 'JourneyData'.
+src/screens/HelpScreen.tsx(88,24): error TS2339: Property 'class' does not exist on type 'JourneyData'.
+src/screens/HelpScreen.tsx(89,25): error TS2339: Property 'status' does not exist on type 'JourneyData'.
+src/screens/HelpScreen.tsx(92,25): error TS2345: Argument of type '{ trainNo: string | undefined; coach: string; seat: string; class: any; status: any; }' is not assignable to parameter of type 'SetStateAction<{ trainNo: string; coach: string; seat: string; class: string; status: string; } | null>'.
+  Type '{ trainNo: string | undefined; coach: string; seat: string; class: any; status: any; }' is not assignable to type '{ trainNo: string; coach: string; seat: string; class: string; status: string; }'.
+    Types of property 'trainNo' are incompatible.
+      Type 'string | undefined' is not assignable to type 'string'.
+        Type 'undefined' is not assignable to type 'string'.

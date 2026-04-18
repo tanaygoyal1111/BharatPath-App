@@ -75,18 +75,18 @@ export default function HelpScreen({ route }: { route: any }) {
     setIsValidatingPnr(true);
     try {
       const response = await apiClient.get(`/pnr/${enteredPnr}`);
-      const apiData = normalizeJourneyData(response.data.data);
+      const apiData = normalizeJourneyData(response.data.data) as any;
 
       if (!apiData || apiData.status === 'CAN') {
         throw new Error("This ticket is cancelled or invalid.");
       }
 
       const newTicketData = {
-        trainNo: apiData.trainNo || apiData.trainNumber,
+        trainNo: apiData.trainNo || apiData.trainNumber || '',
         coach: apiData.coach || 'TBA',
         seat: apiData.seat || 'TBA',
         class: apiData.class || apiData.coach?.replace(/[0-9]/g, '') || '',
-        status: apiData.status
+        status: apiData.status || 'CNF'
       };
       
       setVerifiedTicket(newTicketData);

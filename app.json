@@ -18,8 +18,10 @@
         "NSLocationWhenInUseUsageDescription": "We use your location to track your train journey and provide live updates.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "We use your location to enable proximity alerts during your journey.",
         "LSApplicationQueriesSchemes": [
+          "comgooglemaps",
           "comgooglemaps"
-        ]
+        ],
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {

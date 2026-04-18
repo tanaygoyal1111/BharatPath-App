@@ -6,6 +6,7 @@ module.exports = function (api) {
       "nativewind/babel",
     ],
     plugins: [
+      // react-native-reanimated/plugin MUST be the absolute last item in the plugins array!
       "react-native-reanimated/plugin",
     ],
   };
