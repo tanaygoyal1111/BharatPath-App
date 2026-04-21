@@ -8,6 +8,7 @@ import { saveJourneyData, getJourneyData } from '../utils/storage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import apiClient from '../api/client';
 import { normalizeJourneyData } from '../hooks/usePnrStatus';
+import { useActivePnr } from '../hooks/useActivePnr';
 
 const COLORS = {
   primary: '#1A237E', // Deep Reliability Indigo
@@ -36,9 +37,53 @@ export default function HelpScreen({ route }: { route: any }) {
     trainNo: string; coach: string; seat: string; class: string; status: string;
   } | null>(null);
 
+  // ── Centralized PNR Persistence ────────────────────────────────
+  const { activePnr, isHydrated, setActivePnr, clearActivePnr } = useActivePnr();
+
+  // ── Hydrate verified ticket from centralized PNR or legacy cache ──
   useEffect(() => {
     const loadCachedPnr = async () => {
       try {
+        // Priority 1: Use centralized @active_pnr
+        if (activePnr) {
+          setPnr(activePnr);
+
+          // Try active_journey first (primary app storage), then journey_cache
+          const activeRaw = await AsyncStorage.getItem('active_journey');
+          if (activeRaw) {
+            const parsed = JSON.parse(activeRaw);
+            const journey = parsed.journey || parsed;
+            if (journey.pnr === activePnr || journey.trainNo || journey.trainNumber) {
+              setVerifiedTicket({
+                trainNo: journey.trainNo || journey.trainNumber || '',
+                coach: journey.coach || '',
+                seat: journey.seat || journey.seatNo || '',
+                class: journey.class || journey.trainClass || '',
+                status: journey.status || 'CNF'
+              });
+              return;
+            }
+          }
+
+          const cached = await AsyncStorage.getItem('journey_cache');
+          if (cached) {
+            const journey = JSON.parse(cached);
+            if (journey.pnr === activePnr) {
+              setVerifiedTicket({
+                trainNo: journey.trainNo || journey.trainNumber,
+                coach: journey.coach || '',
+                seat: journey.seat || journey.seatNo || '',
+                class: journey.class || journey.trainClass || '',
+                status: journey.status || 'CNF'
+              });
+              return;
+            }
+          }
+          // PNR exists but no matching cache — badge will still show PNR
+          return;
+        }
+
+        // Priority 2: Legacy journey_cache fallback
         const cached = await AsyncStorage.getItem('journey_cache');
         if (cached) {
           const journey = JSON.parse(cached);
@@ -61,8 +106,8 @@ export default function HelpScreen({ route }: { route: any }) {
         console.error("Failed to load cached PNR", e);
       }
     };
-    loadCachedPnr();
-  }, []);
+    if (isHydrated) loadCachedPnr();
+  }, [isHydrated, activePnr]);
 
   const handleVerifyHelpPnr = async (enteredPnr: string) => {
     setPnrError(null);
@@ -106,6 +151,9 @@ export default function HelpScreen({ route }: { route: any }) {
       });
 
       setShowPnrModal(false);
+
+      // Persist to centralized @active_pnr for cross-screen sync
+      await setActivePnr(enteredPnr);
 
       // Auto-trigger the complaint if the user tapped a complaint first
       if (pendingIssue) {
@@ -169,7 +217,7 @@ export default function HelpScreen({ route }: { route: any }) {
       </View>
 
       {/* Active Journey Badge */}
-      {verifiedTicket ? (
+      {pnr ? (
         <View style={styles.activePnrBadge}>
           <View style={styles.pnrInfoRow}>
             <MaterialCommunityIcons name="ticket-confirmation" size={16} color={COLORS.primary} />
@@ -178,27 +226,48 @@ export default function HelpScreen({ route }: { route: any }) {
           <TouchableOpacity 
             style={styles.editPnrBtn} 
             onPress={() => {
-              setPendingIssue(null);
-              setShowPnrModal(true);
+              if (isOffline) {
+                Alert.alert(
+                  'Connection Required',
+                  'You need an active internet connection to change your PNR.'
+                );
+              } else {
+                // Online: open modal for new PNR entry — old PNR stays until a new valid one is submitted
+                setPnrInput('');
+                setPnrError(null);
+                setPendingIssue(null);
+                setShowPnrModal(true);
+              }
             }}
           >
             <Text style={styles.editPnrText}>EDIT</Text>
           </TouchableOpacity>
         </View>
       ) : (
-        <View style={[styles.activePnrBadge, { backgroundColor: '#F1F5F9', borderBottomColor: '#E2E8F0' }]}>
-          <View style={styles.pnrInfoRow}>
-            <MaterialCommunityIcons name="ticket-confirmation" size={16} color={COLORS.textGray} />
-            <Text style={[styles.activePnrText, { color: COLORS.textGray }]}>NO ACTIVE PNR LINKED</Text>
+        <View style={styles.linkPnrCard}>
+          <View style={styles.linkPnrIconCircle}>
+            <MaterialCommunityIcons name="train" size={28} color={COLORS.textGray} />
+          </View>
+          <View style={styles.linkPnrTextWrap}>
+            <Text style={styles.linkPnrTitle}>Missing your ticket?</Text>
+            <Text style={styles.linkPnrSubtext}>Link your PNR for auto-filled complaints</Text>
           </View>
           <TouchableOpacity 
-            style={[styles.editPnrBtn, { borderColor: '#CBD5E1' }]} 
+            style={styles.linkPnrBtn} 
             onPress={() => {
-              setPendingIssue(null);
-              setShowPnrModal(true);
+              if (isOffline) {
+                Alert.alert(
+                  'Connection Required',
+                  'You need an active internet connection to link a new PNR.'
+                );
+              } else {
+                setPendingIssue(null);
+                setShowPnrModal(true);
+              }
             }}
           >
-            <Text style={[styles.editPnrText, { color: COLORS.textGray }]}>LINK PNR</Text>
+            <Feather name="link" size={14} color={COLORS.primary} />
+            <Text style={styles.linkPnrBtnText}>LINK PNR</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -454,4 +523,24 @@ const styles = StyleSheet.create({
   editPnrText: {
     fontSize: 10, fontWeight: '900', color: COLORS.primary,
   },
+  // Link PNR Card (empty state)
+  linkPnrCard: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#F1F5F9', marginHorizontal: 20, marginTop: 12,
+    paddingHorizontal: 16, paddingVertical: 14, borderRadius: 16,
+    borderWidth: 1, borderColor: '#E2E8F0', borderStyle: 'dashed',
+  },
+  linkPnrIconCircle: {
+    width: 44, height: 44, borderRadius: 22, backgroundColor: '#E2E8F0',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  linkPnrTextWrap: { flex: 1, marginHorizontal: 14 },
+  linkPnrTitle: { fontSize: 13, fontWeight: '800', color: COLORS.textDark, marginBottom: 2 },
+  linkPnrSubtext: { fontSize: 11, fontWeight: '600', color: COLORS.textGray },
+  linkPnrBtn: {
+    flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.white,
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10,
+    borderWidth: 1, borderColor: '#C7D2FE', gap: 6,
+  },
+  linkPnrBtnText: { fontSize: 10, fontWeight: '900', color: COLORS.primary },
 });

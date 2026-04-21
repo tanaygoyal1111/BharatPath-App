@@ -9,6 +9,7 @@ import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/nativ
 import OfflineDashboard from './OfflineDashboard';
 import { useStationSearch } from '../hooks/useStationSearch';
 import { usePnrStatus, getCachedJourney, clearActiveJourney, JourneyData } from '../hooks/usePnrStatus';
+import { useActivePnr } from '../hooks/useActivePnr';
 import { useJourneyNavigation } from '../hooks/useJourneyNavigation';
 import { useQuery } from '@tanstack/react-query';
 import { fetchJourneyData } from '../services/journeyService';
@@ -364,7 +365,7 @@ export default function Dashboard() {
                       <View style={styles.upcomingHeaderRow}>
                         <View style={styles.timeToGoContainer}>
                           <MaterialCommunityIcons name="clock-outline" size={24} color="#FF9F43" />
-                          <Text style={styles.timeToGoText}>{timeToGoText}</Text>
+                          <Text style={styles.timeToGoText} adjustsFontSizeToFit numberOfLines={1}>{timeToGoText}</Text>
                         </View>
                         <View style={styles.upcomingPill}>
                           <Text style={styles.upcomingPillText}>UPCOMING</Text>
@@ -373,21 +374,21 @@ export default function Dashboard() {
                       
                       {/* Train Name */}
                       <Text style={styles.trainNumberText}>TRAIN {activeJourney?.trainNumber || activeJourney?.trainNo || '---'}</Text>
-                      <Text style={styles.trainNameText}>{activeJourney?.trainName?.toUpperCase() || '---'}</Text>
+                      <Text style={styles.trainNameText} numberOfLines={2} adjustsFontSizeToFit>{activeJourney?.trainName?.toUpperCase() || '---'}</Text>
                       
                       {/* Route Visualizer */}
                       <View style={styles.routeVisualizer}>
                         <View style={styles.stationBlock}>
-                          <Text style={styles.stationCode}>{activeJourney?.source?.code || activeJourney?.sourceCode || '--'}</Text>
-                          <Text style={styles.stationName}>{activeJourney?.source?.name?.toUpperCase() || activeJourney?.sourceCity?.toUpperCase() || '--'}</Text>
+                          <Text style={styles.stationCode} adjustsFontSizeToFit numberOfLines={1}>{activeJourney?.source?.code || activeJourney?.sourceCode || '--'}</Text>
+                          <Text style={styles.stationName} numberOfLines={2}>{activeJourney?.source?.name?.toUpperCase() || activeJourney?.sourceCity?.toUpperCase() || '--'}</Text>
                         </View>
                         <View style={styles.routeLineContainer}>
                           <View style={styles.routeLine} />
                           <MaterialCommunityIcons name="train" size={26} color="#1A237E" style={styles.routeTrainIcon} />
                         </View>
-                        <View style={styles.stationBlock}>
-                          <Text style={styles.stationCode}>{activeJourney?.destination?.code || activeJourney?.destCode || '--'}</Text>
-                          <Text style={styles.stationName}>{activeJourney?.destination?.name?.toUpperCase() || activeJourney?.destCity?.toUpperCase() || '--'}</Text>
+                        <View style={[styles.stationBlock, { alignItems: 'flex-end' }]}>
+                          <Text style={styles.stationCode} adjustsFontSizeToFit numberOfLines={1}>{activeJourney?.destination?.code || activeJourney?.destCode || '--'}</Text>
+                          <Text style={styles.stationName} numberOfLines={2}>{activeJourney?.destination?.name?.toUpperCase() || activeJourney?.destCity?.toUpperCase() || '--'}</Text>
                         </View>
                       </View>
                       
@@ -501,12 +502,19 @@ function SearchHubCard({ activeJourney, onJourneyUpdate }: { activeJourney: Jour
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [pnrInput, setPnrInput] = useState('');
+  const [isEditingPnr, setIsEditingPnr] = useState(false);
+
+  // ── Centralized PNR Persistence ───────────────────────────────
+  const { setActivePnr, clearActivePnr } = useActivePnr();
 
   // PNR Mutation
   const pnrMutation = usePnrStatus(
-    (data) => {
+    async (data) => {
       onJourneyUpdate(data);
       setPnrInput('');
+      setIsEditingPnr(false);
+      // Persist PNR for offline complaint engine access
+      if (data.pnr) await setActivePnr(data.pnr);
     },
     (err) => {
       // Handled silently by inline UI banner
@@ -593,7 +601,7 @@ function SearchHubCard({ activeJourney, onJourneyUpdate }: { activeJourney: Jour
   return (
     <View style={styles.card}>
       <View style={styles.searchTabs}>
-        <TouchableOpacity style={activeTab === 'station' ? styles.activeTab : styles.inactiveTab} onPress={() => setActiveTab('station')}>
+        <TouchableOpacity style={activeTab === 'station' ? styles.activeTab : styles.inactiveTab} onPress={() => { setActiveTab('station'); setIsEditingPnr(false); }}>
           <Text style={activeTab === 'station' ? styles.activeTabText : styles.inactiveTabText}>BY STATION</Text>
         </TouchableOpacity>
         <TouchableOpacity style={activeTab === 'pnr' ? styles.activeTab : styles.inactiveTab} onPress={() => setActiveTab('pnr')}>
@@ -719,7 +727,7 @@ function SearchHubCard({ activeJourney, onJourneyUpdate }: { activeJourney: Jour
         </View>
       ) : (
         <View>
-          {!activeJourney ? (
+          {!activeJourney || isEditingPnr ? (
             <>
               <View style={styles.pnrInputContainer}>
                 <MaterialCommunityIcons name="ticket" size={20} color={COLORS.primary} style={styles.pnrIcon} />
@@ -751,11 +759,30 @@ function SearchHubCard({ activeJourney, onJourneyUpdate }: { activeJourney: Jour
               </TouchableOpacity>
             </>
           ) : (
-            <View style={{ marginTop: 20, alignItems: 'center', backgroundColor: COLORS.inputBg, padding: 20, borderRadius: 16 }}>
-              <MaterialIcons name="verified" size={32} color="#22C55E" />
-              <Text style={{ fontSize: 16, fontWeight: '900', color: COLORS.textDark, marginTop: 12 }}>Active Journey Found</Text>
-              <Text style={{ fontSize: 12, color: COLORS.textGray, marginTop: 4 }}>Monitoring PNR: {activeJourney.pnr}</Text>
-              <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.primary, marginTop: 16 }}>SCROLL DOWN FOR DETAILS</Text>
+            <View style={{ marginTop: 20, backgroundColor: COLORS.inputBg, borderRadius: 16, padding: 20 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                  <MaterialIcons name="verified" size={22} color="#22C55E" />
+                  <View style={{ marginLeft: 12, flex: 1 }}>
+                    <Text style={{ fontSize: 10, fontWeight: '800', color: COLORS.textLightGray, letterSpacing: 1, marginBottom: 4 }}>ACTIVE PNR</Text>
+                    <Text style={{ fontSize: 20, fontWeight: '900', color: COLORS.textDark, letterSpacing: 1 }}>{activeJourney.pnr}</Text>
+                  </View>
+                </View>
+                <TouchableOpacity
+                  style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.white, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: COLORS.divider }}
+                  onPress={() => {
+                    setPnrInput('');
+                    pnrMutation.reset();
+                    setIsEditingPnr(true);
+                  }}
+                >
+                  <Feather name="edit-2" size={14} color={COLORS.primary} />
+                  <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.primary, marginLeft: 6, letterSpacing: 0.5 }}>CHANGE</Text>
+                </TouchableOpacity>
+              </View>
+              <Text style={{ fontSize: 11, color: COLORS.textGray, fontWeight: '600', marginTop: 12 }}>
+                {activeJourney.trainName || 'Unknown Train'} • Scroll down for details
+              </Text>
             </View>
           )}
         </View>
@@ -1045,13 +1072,24 @@ const OnlineUtilitiesSection = ({
             </Text>
           </View>
         </View>
-        <Switch 
-          value={isProximityEnabled} 
-          onValueChange={onToggleProximity} 
-          trackColor={{ false: '#767577', true: '#22C55E' }}
-          thumbColor={isProximityEnabled ? '#fff' : '#f4f3f4'}
-          disabled={!hasJourney}
-        />
+        <TouchableOpacity 
+          activeOpacity={1}
+          onPress={() => {
+            if (!hasJourney) {
+              Alert.alert("Journey Required", "An active journey PNR is required to use Proximity Alerts.");
+            }
+          }}
+        >
+          <View pointerEvents={!hasJourney ? "none" : "auto"}>
+            <Switch 
+              value={isProximityEnabled} 
+              onValueChange={onToggleProximity} 
+              trackColor={{ false: '#767577', true: '#22C55E' }}
+              thumbColor={isProximityEnabled ? '#fff' : '#f4f3f4'}
+              disabled={!hasJourney}
+            />
+          </View>
+        </TouchableOpacity>
       </View>
     </View>
   </View>
@@ -1109,7 +1147,7 @@ const styles = StyleSheet.create({
   transitionSubtitle: { fontSize: 12, color: COLORS.textGray, textAlign: 'center', marginTop: 12, lineHeight: 18, fontWeight: '600' },
 
   // --- ONLINE DASHBOARD STYLES ---
-  card: { backgroundColor: COLORS.white, borderRadius: 24, padding: 16, elevation: 3 },
+  card: { backgroundColor: COLORS.white, borderRadius: 24, padding: 16, elevation: 3, width: '100%', maxWidth: 500, alignSelf: 'center' },
   searchTabs: { flexDirection: 'row', backgroundColor: COLORS.inputBg, borderRadius: 14, padding: 4 },
   activeTab: { flex: 1, backgroundColor: COLORS.primary, borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
   inactiveTab: { flex: 1, paddingVertical: 12, alignItems: 'center', justifyContent: 'center' },
@@ -1121,9 +1159,9 @@ const styles = StyleSheet.create({
   inputDividerWrapper: { paddingHorizontal: 52 },
   inputDivider: { height: 1, backgroundColor: '#E0E0E0' },
   inputLeft: { flexDirection: 'row', alignItems: 'center' },
-  inputTextWrapper: { marginLeft: 16 },
+  inputTextWrapper: { marginLeft: 16, flex: 1 },
   inputLabel: { fontSize: 11, color: COLORS.primary, fontWeight: '700', marginBottom: 4, letterSpacing: 0.5 },
-  inputValue: { fontSize: 18, fontWeight: '900', color: COLORS.textDark, minWidth: 100 },
+  inputValue: { fontSize: 18, fontWeight: '900', color: COLORS.textDark, minWidth: 80 },
   swapButton: { position: 'absolute', right: 24, top: '50%', marginTop: -24, width: 48, height: 48, borderRadius: 24, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center', zIndex: 200 },
   dateRow: { flexDirection: 'row', gap: 12, marginTop: 16 },
   dateBox: { flex: 1.2, flexDirection: 'row', backgroundColor: COLORS.inputBg, borderRadius: 18, padding: 16, alignItems: 'center' },
@@ -1140,45 +1178,45 @@ const styles = StyleSheet.create({
   pnrInputContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.inputBg, borderRadius: 16, padding: 18, marginTop: 24, marginBottom: 8 },
   pnrIcon: { marginRight: 12 },
   pnrPlaceholder: { color: COLORS.textLightGray, fontSize: 13, fontWeight: '600', letterSpacing: 0.5 },
-  sectionContainer: { marginTop: 32 },
+  sectionContainer: { marginTop: 32, width: '100%', maxWidth: 500, alignSelf: 'center' },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, paddingHorizontal: 4 },
   sectionTitle: { fontSize: 13, fontWeight: '900', color: COLORS.textDark, letterSpacing: 1 },
   tagOrange: { backgroundColor: COLORS.warning, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
   tagOrangeText: { color: COLORS.white, fontSize: 10, fontWeight: '900', letterSpacing: 0.5 },
   tagIndigo: { backgroundColor: COLORS.primary, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
   tagIndigoText: { color: COLORS.white, fontSize: 10, fontWeight: '900', letterSpacing: 0.5 },
-  cardNoPadding: { backgroundColor: COLORS.white, borderRadius: 24, overflow: 'hidden' },
-  journeyContent: { padding: 24 },
+  cardNoPadding: { backgroundColor: COLORS.white, borderRadius: 24, overflow: 'hidden', width: '100%', maxWidth: 500, alignSelf: 'center' },
+  journeyContent: { padding: 20 },
   upcomingGrid: { paddingHorizontal: 4 },
   gridRow: { flexDirection: 'row', justifyContent: 'space-between' },
   gridItem: { flex: 1 },
-  journeyTrainName: { color: COLORS.primary, fontWeight: '900', fontSize: 16 },
+  journeyTrainName: { color: COLORS.primary, fontWeight: '900', fontSize: 16, flexShrink: 1 },
   journeySubText: { color: COLORS.textLightGray, fontSize: 11, fontWeight: '700', marginTop: 4 },
   stationMapping: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 28 },
-  stationBlockLeft: { alignItems: 'flex-start', flex: 1 },
-  stationBlockRight: { alignItems: 'flex-end', flex: 1 },
-  stationHuge: { fontSize: width > 350 ? 32 : 28, fontWeight: '900', color: COLORS.textDark, letterSpacing: -0.5 },
-  stationCity: { color: COLORS.textGray, fontSize: 11, fontWeight: '700', marginTop: 6 },
+  stationBlockLeft: { alignItems: 'flex-start', flex: 1, flexShrink: 1 },
+  stationBlockRight: { alignItems: 'flex-end', flex: 1, flexShrink: 1 },
+  stationHuge: { fontSize: 30, fontWeight: '900', color: COLORS.textDark, letterSpacing: -0.5 },
+  stationCity: { color: COLORS.textGray, fontSize: 11, fontWeight: '700', marginTop: 6, flexShrink: 1 },
   stationConnector: { flex: 1.5, alignItems: 'center', justifyContent: 'center', position: 'relative', paddingHorizontal: 10 },
   connectorLine: { position: 'absolute', height: 3, backgroundColor: '#E2E8F0', width: '100%', top: '50%', marginTop: -1.5, borderRadius: 2 },
   connectorIconWrap: { backgroundColor: COLORS.white, paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12, borderWidth: 2, borderColor: '#E2E8F0' },
   journeyInfoRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 32, backgroundColor: COLORS.inputBg, padding: 16, borderRadius: 16 },
-  journeyInfoItem: { flex: 1 },
+  journeyInfoItem: { flex: 1, flexShrink: 1 },
   infoLabel: { fontSize: 10, color: COLORS.textLightGray, fontWeight: '800', marginBottom: 6 },
   infoValue: { fontSize: 15, fontWeight: '900', color: COLORS.textDark },
   infoValueBlue: { fontSize: 15, fontWeight: '900', color: COLORS.primary },
   progressSection: { marginTop: 28 },
   progressHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  progressRow: { flexDirection: 'row', alignItems: 'center' },
-  progressText: { fontSize: 12, color: COLORS.textGray, fontWeight: '700', marginLeft: 6 },
+  progressRow: { flexDirection: 'row', alignItems: 'center', flex: 1, flexShrink: 1 },
+  progressText: { fontSize: 12, color: COLORS.textGray, fontWeight: '700', marginLeft: 6, flexShrink: 1 },
   etaText: { fontSize: 12, color: COLORS.primary, fontWeight: '900' },
   progressBarBg: { height: 10, backgroundColor: COLORS.inputBg, borderRadius: 5, position: 'relative' },
   progressBarFill: { height: '100%', backgroundColor: COLORS.primary, borderRadius: 5 },
   progressDot: { position: 'absolute', top: -3, width: 16, height: 16, backgroundColor: COLORS.white, borderWidth: 3, borderColor: COLORS.primary, borderRadius: 8, marginLeft: -8 },
   // Travel Banner (Active state)
-  travelBanner: { backgroundColor: COLORS.primary, borderRadius: 16, paddingHorizontal: 18, paddingVertical: 14, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
-  travelBannerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  travelBannerText: { color: COLORS.white, fontSize: 13, fontWeight: '700' },
+  travelBanner: { backgroundColor: COLORS.primary, borderRadius: 16, paddingHorizontal: 18, paddingVertical: 14, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, width: '100%', maxWidth: 500, alignSelf: 'center' },
+  travelBannerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1, flexShrink: 1 },
+  travelBannerText: { color: COLORS.white, fontSize: 13, fontWeight: '700', flexShrink: 1 },
   travelBannerBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: COLORS.white, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 },
   travelBannerBtnText: { color: COLORS.primary, fontSize: 12, fontWeight: '900' },
   // Track Journey CTA (Upcoming)
@@ -1187,7 +1225,7 @@ const styles = StyleSheet.create({
   // Track Live CTA (Active - with pulse)
   trackLiveBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: COLORS.primary, paddingVertical: 16, borderRadius: 14 },
   trackLiveBtnText: { color: COLORS.white, fontSize: 14, fontWeight: '900', letterSpacing: 1 },
-  utilitiesGrid: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16 },
+  utilitiesGrid: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16, width: '100%', maxWidth: 500, alignSelf: 'center' },
   utilitySquare: { width: '48%', backgroundColor: COLORS.white, borderRadius: 24, padding: 20 },
   utilityTextWrap: { marginTop: 20 },
   utilityRect: { backgroundColor: COLORS.white, borderRadius: 24, padding: 20, marginBottom: 16 },
@@ -1227,7 +1265,10 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 }, 
     shadowOpacity: 0.08, 
     shadowRadius: 12, 
-    elevation: 3 
+    elevation: 3,
+    width: '100%',
+    maxWidth: 500,
+    alignSelf: 'center' as const,
   },
   upcomingHeaderRow: { 
     flexDirection: 'row', 
@@ -1238,13 +1279,17 @@ const styles = StyleSheet.create({
   timeToGoContainer: { 
     flexDirection: 'row', 
     alignItems: 'center', 
-    gap: 12 
+    gap: 12,
+    flex: 1,
+    flexShrink: 1,
+    marginRight: 12,
   },
   timeToGoText: { 
     fontSize: 24, 
     fontWeight: '900', 
     color: '#1A1C1C',
-    letterSpacing: -0.5
+    letterSpacing: -0.5,
+    flexShrink: 1,
   },
   upcomingPill: { 
     backgroundColor: '#1A237E', 
@@ -1284,13 +1329,14 @@ const styles = StyleSheet.create({
   },
   stationBlock: { 
     alignItems: 'flex-start', 
-    flex: 1 
+    flex: 1,
+    flexShrink: 1,
   },
   stationCode: { 
-    fontSize: 30, 
+    fontSize: 28, 
     fontWeight: '900', 
     color: '#1A1C1C',
-    letterSpacing: -1
+    letterSpacing: -1,
   },
   stationName: { 
     fontSize: 11, 
@@ -1347,7 +1393,7 @@ const styles = StyleSheet.create({
   },
 
   // ── FLOATING SNACKBAR STYLES ──────────────────────────────────
-  floatingPillSnackbar: { position: 'absolute', bottom: 30, alignSelf: 'center', width: '92%', backgroundColor: '#333333', borderRadius: 50, paddingVertical: 12, paddingHorizontal: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 5, elevation: 8, zIndex: 100 },
+  floatingPillSnackbar: { position: 'absolute', bottom: 30, alignSelf: 'center', width: '92%', maxWidth: 500, backgroundColor: '#333333', borderRadius: 50, paddingVertical: 12, paddingHorizontal: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 5, elevation: 8, zIndex: 100 },
   snackBarTextContainer: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   snackBarText: { color: '#FFFFFF', fontSize: 14, fontWeight: '500' },
   snackBarActions: { flexDirection: 'row', alignItems: 'center', gap: 12 },

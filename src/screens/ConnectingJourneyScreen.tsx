@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, StatusBar, TextInput, Animated, Dimensions, ActivityIndicator, LayoutAnimation, UIManager, Modal, FlatList } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, StatusBar, TextInput, Animated, Dimensions, ActivityIndicator, LayoutAnimation, UIManager, Modal, FlatList, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Feather, MaterialIcons, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
@@ -29,12 +29,13 @@ export default function ConnectingJourneyScreen() {
   const navigation = useNavigation();
   const netInfo = useNetInfo();
   const isOffline = netInfo.isConnected === false;
-  const [isModifying, setIsModifying] = useState(false);
+  const [isModifying, setIsModifying] = useState(true);
   const [resultsLoaded, setResultsLoaded] = useState(true);
   const [isSearchingLoading, setIsSearchingLoading] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
 
-  const [fromStation, setFromStation] = useState('NDLS');
-  const [toStation, setToStation] = useState('BSB');
+  const [fromStation, setFromStation] = useState('');
+  const [toStation, setToStation] = useState('');
   const [travelDate, setTravelDate] = useState('20 MAY 2026');
   const [isOnline, setIsOnline] = useState(false);
   const [journeyResults, setJourneyResults] = useState<JourneyOption[]>([]);
@@ -72,6 +73,11 @@ export default function ConnectingJourneyScreen() {
 
   // NEW: Refactored to async to handle the Promise returned by the algorithm
   const handleUpdate = async () => {
+    if (!fromStation || !toStation) {
+      Alert.alert("Missing Input", "Please enter both source and destination stations.");
+      return;
+    }
+
     setIsSearchingLoading(true);
     
     // NEW: We await the result natively here without an artificial setTimeout
@@ -79,15 +85,12 @@ export default function ConnectingJourneyScreen() {
     
     LayoutAnimation.configureNext(LayoutAnimation.Presets.spring);
     setJourneyResults(results);
+    setHasSearched(true);
     setDisplayedCount(10); // NEW: Reset displayed count on new search
     setIsSearchingLoading(false);
     setIsModifying(false);
     setResultsLoaded(true);
   };
-
-  useEffect(() => {
-    handleUpdate();
-  }, []);
 
   // NEW: Smart Sorting and Filtering Logic
   const sortedAndFilteredResults = useMemo(() => {
@@ -338,6 +341,12 @@ export default function ConnectingJourneyScreen() {
                     <Text style={styles.showMoreBtnText}>SHOW MORE RESULTS</Text>
                  </TouchableOpacity>
                )}
+             </View>
+           ) : !hasSearched ? (
+             <View style={styles.emptyState}>
+                <Ionicons name="map-outline" size={48} color={COLORS.placeholder} />
+                <Text style={styles.emptyText}>Where to?</Text>
+                <Text style={styles.emptySubText}>Enter your source and destination to find the best connecting trains.</Text>
              </View>
            ) : (
              <View style={styles.emptyState}>

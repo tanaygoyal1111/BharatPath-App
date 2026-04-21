@@ -1,15 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, ImageBackground, Dimensions, ActivityIndicator, Switch, Alert, Animated as RNAnimated } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, ImageBackground, ActivityIndicator, Switch, Alert, Animated as RNAnimated } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useJourneyData } from '../hooks/useJourneyData';
 import { getCachedJourney, normalizeJourneyData, JourneyData } from '../hooks/usePnrStatus';
+import { useActivePnr } from '../hooks/useActivePnr';
 import { useNetInfo } from '@react-native-community/netinfo';
 
 
-const { width } = Dimensions.get('window');
 
 const COLORS = {
   primary: '#1A237E', // Deep Reliability Indigo
@@ -80,19 +80,32 @@ export default function OfflineDashboard({ onHelpPress }: { onHelpPress?: () => 
   // ── Snackbar State ────────────────────────────────────────────
   const [isSnackbarDismissed, setIsSnackbarDismissed] = useState(false);
   const slideAnim = useRef(new RNAnimated.Value(150)).current;
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const autoDismissRef = useRef<NodeJS.Timeout | null>(null);
+  const nudgeIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const wasOnlineRef = useRef(false);
 
-  // ── Reset dismissal if network drops again ────────────────────
+  // ── Helper: Nuke all active timers ────────────────────────────
+  const clearAllTimers = () => {
+    if (autoDismissRef.current) { clearTimeout(autoDismissRef.current); autoDismissRef.current = null; }
+    if (nudgeIntervalRef.current) { clearInterval(nudgeIntervalRef.current); nudgeIntervalRef.current = null; }
+  };
+
+  // ── Network Drop Reset ────────────────────────────────────────
+  // If connectivity drops, immediately disarm everything and re-arm
+  // the system so the pill fires fresh on the next recovery edge.
   useEffect(() => {
     if (netInfo.isConnected === false) {
+      clearAllTimers();
       setIsSnackbarDismissed(false);
-      if (timerRef.current) clearTimeout(timerRef.current);
+      wasOnlineRef.current = false;
     }
   }, [netInfo.isConnected]);
 
-  // ── Snackbar Animation & 10s Auto-Dismiss (Recovery Flow) ─────
+  // ── Snackbar Animation & 8s Auto-Dismiss (Recovery Flow) ──────
   useEffect(() => {
     const shouldShow = isOnline && !isSnackbarDismissed;
+
+    // Animate the pill in or out
     RNAnimated.spring(slideAnim, {
       toValue: shouldShow ? 0 : 150,
       useNativeDriver: true,
@@ -100,18 +113,44 @@ export default function OfflineDashboard({ onHelpPress }: { onHelpPress?: () => 
       friction: 8,
     }).start();
 
-    if (timerRef.current) clearTimeout(timerRef.current);
+    // Clear any previous auto-dismiss timer before scheduling a new one
+    if (autoDismissRef.current) { clearTimeout(autoDismissRef.current); autoDismissRef.current = null; }
+
+    // Only start the 8s auto-dismiss on a true offline→online recovery edge
     if (shouldShow) {
-      timerRef.current = setTimeout(() => setIsSnackbarDismissed(true), 10000);
+      autoDismissRef.current = setTimeout(() => {
+        setIsSnackbarDismissed(true);
+      }, 8000);
+      wasOnlineRef.current = true;
     }
 
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+    return () => {
+      if (autoDismissRef.current) { clearTimeout(autoDismissRef.current); autoDismissRef.current = null; }
+    };
   }, [isOnline, isSnackbarDismissed, slideAnim]);
+
+  // ── Smart Nudge Interval (2 min re-prompt) ────────────────────
+  // When the user is online but has dismissed the pill (auto or manual),
+  // gently re-show it every 2 minutes as a reminder.
+  useEffect(() => {
+    // Clear any prior nudge interval
+    if (nudgeIntervalRef.current) { clearInterval(nudgeIntervalRef.current); nudgeIntervalRef.current = null; }
+
+    if (isOnline && isSnackbarDismissed) {
+      nudgeIntervalRef.current = setInterval(() => {
+        setIsSnackbarDismissed(false);
+      }, 120000); // 2 minutes
+    }
+
+    return () => {
+      if (nudgeIntervalRef.current) { clearInterval(nudgeIntervalRef.current); nudgeIntervalRef.current = null; }
+    };
+  }, [isOnline, isSnackbarDismissed]);
 
   // ── Snackbar → Switch to Live Mode ────────────────────────────
   const handleSwitchToLive = () => {
     setIsSnackbarDismissed(true);
-    if (timerRef.current) clearTimeout(timerRef.current);
+    clearAllTimers();
     // Wait for pill slide-down animation, then cleanly replace the screen
     setTimeout(() => {
       navigation.replace('Dashboard');
@@ -240,6 +279,11 @@ export default function OfflineDashboard({ onHelpPress }: { onHelpPress?: () => 
           ) : (
             <BoardedCard cachedJourney={cachedJourney} />
           )}
+
+          {/* ── Active PNR Badge (Offline) ── */}
+          {cachedJourney?.pnr && (
+            <ActivePnrBadge pnr={cachedJourney.pnr} />
+          )}
           
           <OfflineUtilities 
             onHelpPress={onHelpPress} 
@@ -277,7 +321,7 @@ const UpcomingCard = ({ data, timeToGoText }: { data: JourneyData, timeToGoText:
     <View style={styles.upcomingHeaderRow}>
       <View style={styles.timeToGoContainer}>
         <MaterialCommunityIcons name="clock-outline" size={24} color="#FF9F43" />
-        <Text style={styles.timeToGoText}>{timeToGoText}</Text>
+        <Text style={styles.timeToGoText} adjustsFontSizeToFit numberOfLines={1}>{timeToGoText}</Text>
       </View>
       <View style={styles.upcomingPill}>
         <Text style={styles.upcomingPillText}>UPCOMING</Text>
@@ -285,20 +329,20 @@ const UpcomingCard = ({ data, timeToGoText }: { data: JourneyData, timeToGoText:
     </View>
     
     <Text style={styles.trainNumberText}>TRAIN {data.trainNumber || data.trainNo}</Text>
-    <Text style={styles.trainNameText}>{data.trainName?.toUpperCase()}</Text>
+    <Text style={styles.trainNameText} numberOfLines={2} adjustsFontSizeToFit>{data.trainName?.toUpperCase()}</Text>
     
     <View style={styles.routeVisualizer}>
       <View style={styles.stationBlock}>
-        <Text style={styles.stationCode}>{data.source?.code || '--'}</Text>
-        <Text style={styles.stationName}>{data.source?.name || '--'}</Text>
+        <Text style={styles.stationCode} adjustsFontSizeToFit numberOfLines={1}>{data.source?.code || '--'}</Text>
+        <Text style={styles.stationName} numberOfLines={2}>{data.source?.name || '--'}</Text>
       </View>
       <View style={styles.routeLineContainer}>
         <View style={styles.routeLine} />
         <MaterialCommunityIcons name="train" size={26} color="#1A237E" style={styles.routeTrainIcon} />
       </View>
       <View style={[styles.stationBlock, { alignItems: 'flex-end' }]}>
-        <Text style={styles.stationCode}>{data.destination?.code || '--'}</Text>
-        <Text style={styles.stationName}>{data.destination?.name || '--'}</Text>
+        <Text style={styles.stationCode} adjustsFontSizeToFit numberOfLines={1}>{data.destination?.code || '--'}</Text>
+        <Text style={styles.stationName} numberOfLines={2}>{data.destination?.name || '--'}</Text>
       </View>
     </View>
     
@@ -332,7 +376,7 @@ const UpcomingCard = ({ data, timeToGoText }: { data: JourneyData, timeToGoText:
 const BoardedCard = ({ cachedJourney }: { cachedJourney: any }) => (
   <View style={styles.boardedCard}>
     <Text style={styles.boardedSubtitle}>CURRENTLY BOARDED</Text>
-    <Text style={styles.boardedTitle}>
+    <Text style={styles.boardedTitle} numberOfLines={3} adjustsFontSizeToFit>
       {cachedJourney?.trainNumber || '----'} {cachedJourney?.trainName?.split(' ')[0] || 'Unknown'}{'\n'}
       {cachedJourney?.trainName?.split(' ').slice(1).join(' ') || 'Train'}
     </Text>
@@ -341,7 +385,7 @@ const BoardedCard = ({ cachedJourney }: { cachedJourney: any }) => (
       <View style={styles.routeOrigin}>
         <Text style={styles.routeLabelSmall}>ORIGIN</Text>
         <Text style={styles.routeCode} adjustsFontSizeToFit numberOfLines={1}>{cachedJourney?.source?.code || '--'}</Text>
-        <Text style={styles.routeCity}>{cachedJourney?.source?.name || '--'}</Text>
+        <Text style={styles.routeCity} numberOfLines={2}>{cachedJourney?.source?.name || '--'}</Text>
       </View>
 
       <View style={styles.routeCenter}>
@@ -356,7 +400,7 @@ const BoardedCard = ({ cachedJourney }: { cachedJourney: any }) => (
       <View style={styles.routeDest}>
         <Text style={styles.routeLabelSmall}>DESTINATION</Text>
         <Text style={styles.routeCode} adjustsFontSizeToFit numberOfLines={1}>{cachedJourney?.destination?.code || '--'}</Text>
-        <Text style={styles.routeCity}>{cachedJourney?.destination?.name || '--'}</Text>
+        <Text style={styles.routeCity} numberOfLines={2}>{cachedJourney?.destination?.name || '--'}</Text>
       </View>
     </View>
 
@@ -424,7 +468,7 @@ const OfflineUtilities = ({
         </View>
       </View>
 
-      <TouchableOpacity style={[styles.offlineUtilitySquare, styles.utilOrangeBorder]} onPress={() => onFeaturePress('QuickComplaint', true, false)}>
+      <TouchableOpacity style={[styles.offlineUtilitySquare, styles.utilOrangeBorder]} onPress={() => onFeaturePress('QuickComplaint', false, false)}>
         <View style={[styles.iconBox3D, { backgroundColor: COLORS.bgComplaint }]}>
           <MaterialCommunityIcons name="alert-decagram" size={28} color={COLORS.alertRed || '#D32F2F'} />
           <View style={[styles.iconBadge, { backgroundColor: COLORS.primary }]}>
@@ -477,6 +521,30 @@ const OfflineUtilities = ({
   </View>
 );
 
+const ActivePnrBadge = ({ pnr }: { pnr: string }) => (
+  <View style={styles.activePnrBadge}>
+    <View style={styles.pnrBadgeLeft}>
+      <MaterialCommunityIcons name="ticket-confirmation" size={16} color={COLORS.primary} />
+      <View style={{ marginLeft: 10 }}>
+        <Text style={styles.pnrBadgeLabel}>ACTIVE PNR</Text>
+        <Text style={styles.pnrBadgeValue}>{pnr}</Text>
+      </View>
+    </View>
+    <TouchableOpacity
+      style={styles.pnrBadgeEditBtn}
+      onPress={() => {
+        Alert.alert(
+          'Connection Required',
+          'You need an active internet connection to change your PNR. Switch to Online Mode first.'
+        );
+      }}
+    >
+      <Feather name="edit-2" size={12} color={COLORS.primary} />
+      <Text style={styles.pnrBadgeEditText}>EDIT</Text>
+    </TouchableOpacity>
+  </View>
+);
+
 const NextHaltBanner = ({ haltName, haltCode }: { haltName: string, haltCode: string }) => (
   <View style={styles.nextHaltContainer}>
     <ImageBackground 
@@ -496,18 +564,19 @@ const styles = StyleSheet.create({
   scrollContent: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 40 },
   
   boardedCard: {
-    backgroundColor: COLORS.white, borderRadius: 16, padding: 24,
+    backgroundColor: COLORS.white, borderRadius: 16, padding: 20,
     shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 10, elevation: 3,
+    width: '100%', maxWidth: 500, alignSelf: 'center' as const,
   },
   boardedSubtitle: { fontSize: 10, color: COLORS.primary, fontWeight: '800', letterSpacing: 1, marginBottom: 4 },
-  boardedTitle: { fontSize: 26, fontWeight: '900', color: COLORS.primary, letterSpacing: -0.5, lineHeight: 28 },
+  boardedTitle: { fontSize: 24, fontWeight: '900', color: COLORS.primary, letterSpacing: -0.5, lineHeight: 28, flexShrink: 1 },
   
   routeHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 28 },
-  routeOrigin: { alignItems: 'flex-start', flex: 1 },
-  routeDest: { alignItems: 'flex-end', flex: 1 },
+  routeOrigin: { alignItems: 'flex-start', flex: 1, flexShrink: 1 },
+  routeDest: { alignItems: 'flex-end', flex: 1, flexShrink: 1 },
   routeLabelSmall: { fontSize: 9, color: COLORS.textGray, fontWeight: '800', letterSpacing: 1 },
-  routeCode: { fontSize: width > 350 ? 32 : 26, fontWeight: '900', color: COLORS.textDark, letterSpacing: -1, marginVertical: 4 },
-  routeCity: { fontSize: 12, color: COLORS.textGray, fontWeight: '600' },
+  routeCode: { fontSize: 28, fontWeight: '900', color: COLORS.textDark, letterSpacing: -1, marginVertical: 4 },
+  routeCity: { fontSize: 12, color: COLORS.textGray, fontWeight: '600', flexShrink: 1 },
   
   routeCenter: { flex: 1.2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
   dashLineLeft: { flex: 1, height: 1, backgroundColor: COLORS.divider },
@@ -516,10 +585,10 @@ const styles = StyleSheet.create({
   transitText: { fontSize: 9, color: COLORS.primary, fontWeight: '800', marginTop: 4, letterSpacing: 0.5 },
 
   quickInfoBlocks: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 32 },
-  infoBlock: { flex: 1, backgroundColor: COLORS.background, borderRadius: 8, padding: 12 },
-  coachBlock: { paddingLeft: 12, borderLeftWidth: 4, borderLeftColor: '#5D4037' },
+  infoBlock: { flex: 1, backgroundColor: COLORS.background, borderRadius: 8, padding: 10 },
+  coachBlock: { paddingLeft: 10, borderLeftWidth: 4, borderLeftColor: '#5D4037' },
   blockLabel: { fontSize: 9, color: COLORS.textDark, fontWeight: '800', letterSpacing: 0.5 },
-  blockValue: { fontSize: width > 350 ? 20 : 16, fontWeight: '900', color: COLORS.primary, marginTop: 4 },
+  blockValue: { fontSize: 18, fontWeight: '900', color: COLORS.primary, marginTop: 4, flexShrink: 1 },
 
   offlineUtilsContainer: { marginTop: 16 },
   offlineRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16 },
@@ -545,7 +614,7 @@ const styles = StyleSheet.create({
   offlineUtilTitleDisabled: { fontSize: 12, fontWeight: '900', color: COLORS.disabledText, letterSpacing: 0.5 },
   offlineUtilDescDisabled: { fontSize: 10, color: COLORS.disabledText, fontWeight: '600', marginTop: 4 },
 
-  nextHaltContainer: { height: 120, borderRadius: 16, overflow: 'hidden', marginTop: 8 },
+  nextHaltContainer: { minHeight: 120, borderRadius: 16, overflow: 'hidden', marginTop: 8, maxWidth: 500, alignSelf: 'center' as const, width: '100%' },
   nextHaltBg: { width: '100%', height: '100%', justifyContent: 'flex-end' },
   nextHaltOverlay: {
     backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 20, paddingVertical: 16, height: '100%', justifyContent: 'flex-end'
@@ -554,7 +623,7 @@ const styles = StyleSheet.create({
   nextHaltStation: { fontSize: 22, color: COLORS.white, fontWeight: '900', letterSpacing: 0.5 },
 
   // Empty State Styles
-  emptyStateContainer: { marginTop: 8, marginBottom: 16 },
+  emptyStateContainer: { marginTop: 8, marginBottom: 16, width: '100%', maxWidth: 500, alignSelf: 'center' as const },
   emptyStateHeader: { fontSize: 10, color: COLORS.primary, fontWeight: '800', letterSpacing: 1, marginBottom: 12, marginLeft: 4 },
   emptyStateCard: {
     backgroundColor: COLORS.white, borderRadius: 16, padding: 32, alignItems: 'center',
@@ -568,14 +637,17 @@ const styles = StyleSheet.create({
   upcomingCard: { 
     backgroundColor: '#FFFFFF', 
     borderRadius: 16, 
-    padding: 24, 
+    padding: 20, 
     borderWidth: 1,
     borderColor: '#E3F2FD',
     shadowColor: '#1A237E', 
     shadowOffset: { width: 0, height: 4 }, 
     shadowOpacity: 0.08, 
     shadowRadius: 12, 
-    elevation: 3 
+    elevation: 3,
+    width: '100%',
+    maxWidth: 500,
+    alignSelf: 'center' as const,
   },
   upcomingHeaderRow: { 
     flexDirection: 'row', 
@@ -586,13 +658,17 @@ const styles = StyleSheet.create({
   timeToGoContainer: { 
     flexDirection: 'row', 
     alignItems: 'center', 
-    gap: 12 
+    gap: 12,
+    flex: 1,
+    flexShrink: 1,
+    marginRight: 12,
   },
   timeToGoText: { 
     fontSize: 24, 
     fontWeight: '900', 
     color: '#1A1C1C',
-    letterSpacing: -0.5
+    letterSpacing: -0.5,
+    flexShrink: 1,
   },
   upcomingPill: { 
     backgroundColor: '#1A237E', 
@@ -632,13 +708,14 @@ const styles = StyleSheet.create({
   },
   stationBlock: { 
     alignItems: 'flex-start', 
-    flex: 1 
+    flex: 1,
+    flexShrink: 1,
   },
   stationCode: { 
-    fontSize: 30, 
+    fontSize: 28, 
     fontWeight: '900', 
     color: '#1A1C1C',
-    letterSpacing: -1
+    letterSpacing: -1,
   },
   stationName: { 
     fontSize: 11, 
@@ -695,11 +772,28 @@ const styles = StyleSheet.create({
   },
 
   // ── FLOATING SNACKBAR STYLES (Recovery Green) ─────────────────
-  floatingPillSnackbar: { position: 'absolute', bottom: 30, alignSelf: 'center', width: '92%', backgroundColor: '#2E7D32', borderRadius: 50, paddingVertical: 12, paddingHorizontal: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 5, elevation: 8, zIndex: 100 },
+  floatingPillSnackbar: { position: 'absolute', bottom: 30, alignSelf: 'center', width: '92%', maxWidth: 500, backgroundColor: '#2E7D32', borderRadius: 50, paddingVertical: 12, paddingHorizontal: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 5, elevation: 8, zIndex: 100 },
   snackBarTextContainer: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   snackBarText: { color: '#FFFFFF', fontSize: 14, fontWeight: '500' },
   snackBarActions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   snackBarButton: { backgroundColor: '#FFFFFF', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
   snackBarButtonText: { color: '#2E7D32', fontSize: 11, fontWeight: 'bold' },
   snackBarCloseIcon: { padding: 4 },
+
+  // ── ACTIVE PNR BADGE ──────────────────────────────────────────
+  activePnrBadge: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    backgroundColor: '#EEF2FF', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12,
+    marginTop: 16, borderWidth: 1, borderColor: '#E0E7FF',
+    width: '100%', maxWidth: 500, alignSelf: 'center' as const,
+  },
+  pnrBadgeLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  pnrBadgeLabel: { fontSize: 9, fontWeight: '800', color: COLORS.textLightGray, letterSpacing: 1 },
+  pnrBadgeValue: { fontSize: 16, fontWeight: '900', color: COLORS.textDark, letterSpacing: 1, marginTop: 2 },
+  pnrBadgeEditBtn: {
+    flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.white,
+    paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8,
+    borderWidth: 1, borderColor: '#C7D2FE',
+  },
+  pnrBadgeEditText: { fontSize: 10, fontWeight: '900', color: COLORS.primary, marginLeft: 6 },
 });

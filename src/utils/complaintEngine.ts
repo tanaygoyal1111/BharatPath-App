@@ -1,5 +1,6 @@
 import { Alert, Linking } from 'react-native';
 import * as SMS from 'expo-sms';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getJourneyData } from './storage';
 
 export type IssueType = 'cleaning' | 'medical' | 'security' | 'electrical';
@@ -17,13 +18,42 @@ const formatDOJ = (date?: string | Date) => {
 };
 
 /**
+ * Resolves journey data for complaint SMS body generation.
+ * Priority: journey_data (legacy) → @active_pnr + active_journey (centralized)
+ */
+const resolveJourneyData = async (): Promise<any | null> => {
+  // Priority 1: Legacy journey_data storage
+  const data = await getJourneyData();
+  if (data && data.pnr && data.pnr !== 'UNKNOWN') return data;
+
+  // Priority 2: Centralized @active_pnr + active_journey cache
+  try {
+    const storedPnr = await AsyncStorage.getItem('@active_pnr');
+    if (!storedPnr) return null;
+
+    const activeJourneyRaw = await AsyncStorage.getItem('active_journey');
+    if (activeJourneyRaw) {
+      const parsed = JSON.parse(activeJourneyRaw);
+      const journey = parsed.journey || parsed;
+      return { ...journey, pnr: storedPnr, statusTag: journey.statusTag || 'ACTIVE' };
+    }
+
+    // PNR exists but no journey cache — return minimal data
+    return { pnr: storedPnr, statusTag: 'ACTIVE' };
+  } catch (e) {
+    console.error('[complaintEngine] Failed to resolve journey data:', e);
+    return null;
+  }
+};
+
+/**
  * Triggers an official SMS string generation targeting IRCTC numbers.
  * @param issueType The category of the complaint mapped to IRCTC protocols.
  * @param customMessage Optional message appendage for security disputes.
  */
 export const triggerOfficialComplaint = async (issueType: IssueType, navigation: any, customMessage: string = '') => {
   try {
-    const data = await getJourneyData();
+    const data = await resolveJourneyData();
     
     if (!data || !data.pnr || data.pnr === 'UNKNOWN') {
       Alert.alert(
