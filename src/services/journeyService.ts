@@ -14,6 +14,7 @@ export interface JourneyStation {
   platform?: string;
   schArrival?: string;
   actArrival?: string;
+  status?: 'passed' | 'current' | 'upcoming' | 'destination';
 }
 
 export interface JourneyAPIData {
@@ -88,4 +89,32 @@ export const fetchAmenities = async (lat: number, lng: number): Promise<Amenitie
   }
 
   return response.data;
+};
+
+/**
+ * Live Train Status response shape (matches backend liveTrainProvider contract)
+ */
+export interface LiveTrainData {
+  trainName: string;
+  currentStationCode: string;
+  stations: JourneyStation[];
+}
+
+/**
+ * Fetch live train status from the backend.
+ * GET /api/v1/trains/live/:trainNumber?startDay=N
+ *
+ * @param trainNo  – 5-digit train number string
+ * @param startDay – Journey start day offset (0 = today, 1 = yesterday, 2 = 2 days ago)
+ */
+export const fetchLiveTrainStatus = async (trainNo: string, startDay: number = 0): Promise<LiveTrainData> => {
+  const response = await apiClient.get(`trains/live/${trainNo}`, {
+    params: { startDay },
+  });
+
+  if (!response.data?.success) {
+    throw new Error(response.data?.error || 'Failed to fetch live train status');
+  }
+
+  return response.data.data;
 };

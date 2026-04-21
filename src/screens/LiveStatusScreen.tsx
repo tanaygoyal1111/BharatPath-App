@@ -16,7 +16,7 @@ import {
   Alert,
   Linking,
   TextInput,
-  Modal,
+
 } from 'react-native';
 import { MaterialCommunityIcons, Feather } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -25,7 +25,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import * as Haptics from 'expo-haptics';
 import { useQuery } from '@tanstack/react-query';
-import { fetchJourneyData, JourneyAPIData, JourneyStation } from '../services/journeyService';
+import { fetchJourneyData, JourneyAPIData, JourneyStation, fetchLiveTrainStatus, LiveTrainData } from '../services/journeyService';
 
 // --- TYPES & CONSTANTS ---
 type JourneyState = 'LOADING' | 'UPCOMING' | 'ACTIVE' | 'NOT_TRAVELLING' | 'COMPLETED' | 'GPS_OFF';
@@ -106,14 +106,41 @@ function getConfidence({ isMoving, isNearRoute, accuracy }: { isMoving: boolean;
 }
 
 // --- TRACKING RESULTS UI COMPONENT ---
-const TrackingResultsUI = ({ onBack, journeyData }: { onBack: () => void, journeyData: any }) => {
-  const mockStations = [
-    { code: 'NDLS', name: 'NEW DELHI', distance: '0 km', arr: '--:--', dep: '08:00', status: 'passed' },
-    { code: 'ALJN', name: 'ALIGARH JN', distance: '131 km', arr: '11:45', dep: '11:47', status: 'passed' },
-    { code: 'CNB', name: 'KANPUR JN', distance: '440 km', arr: '14:45', dep: '14:50', status: 'current' },
-    { code: 'PRYJ', name: 'PRAYAGRAJ JN', distance: '634 km', arr: '17:10', dep: '17:15', status: 'upcoming' },
-    { code: 'BSB', name: 'VARANASI JN', distance: '770 km', arr: '20:30', dep: '--:--', status: 'destination' },
-  ];
+const TrackingResultsUI = ({ onBack, journeyData, isLoading, isError }: { onBack: () => void, journeyData: LiveTrainData | null | undefined, isLoading: boolean, isError: boolean }) => {
+
+  // Derive summary info from stations
+  const stations = journeyData?.stations || [];
+  const trainName = journeyData?.trainName || 'Loading...';
+  const currentStation = stations.find(s => s.status === 'current');
+  const nextUpcoming = stations.find(s => s.status === 'upcoming');
+  const nextStopName = nextUpcoming?.name || currentStation?.name || '—';
+  const nextStopArr = nextUpcoming?.schArrival || currentStation?.schArrival || '--:--';
+
+  if (isLoading) {
+    return (
+      <View style={[styles.trackingOuter, { justifyContent: 'center', alignItems: 'center' }]}>
+        <SafeAreaView style={{ flex: 0, backgroundColor: COLORS.navy }} />
+        <StatusBar barStyle="light-content" backgroundColor={COLORS.navy} />
+        <ActivityIndicator size="large" color={COLORS.navy} />
+        <Text style={{ marginTop: 16, fontSize: 14, fontWeight: '700', color: COLORS.slateMuted }}>Fetching live status...</Text>
+      </View>
+    );
+  }
+
+  if (isError || !journeyData || stations.length === 0) {
+    return (
+      <View style={[styles.trackingOuter, { justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 }]}>
+        <SafeAreaView style={{ flex: 0, backgroundColor: COLORS.navy }} />
+        <StatusBar barStyle="light-content" backgroundColor={COLORS.navy} />
+        <MaterialCommunityIcons name="train-car" size={56} color={COLORS.slateBorder} />
+        <Text style={{ marginTop: 16, fontSize: 16, fontWeight: '800', color: COLORS.slateDark, textAlign: 'center' }}>Could not load live status</Text>
+        <Text style={{ marginTop: 8, fontSize: 13, fontWeight: '600', color: COLORS.slateMuted, textAlign: 'center' }}>Please verify the train number and try again.</Text>
+        <TouchableOpacity onPress={onBack} style={{ marginTop: 24, backgroundColor: COLORS.navy, paddingHorizontal: 28, paddingVertical: 12, borderRadius: 8 }}>
+          <Text style={{ color: COLORS.white, fontWeight: '800', fontSize: 13 }}>GO BACK</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.trackingOuter}>
@@ -125,7 +152,7 @@ const TrackingResultsUI = ({ onBack, journeyData }: { onBack: () => void, journe
         <TouchableOpacity onPress={onBack} hitSlop={{top:10,bottom:10,left:10,right:10}}>
           <Feather name="arrow-left" size={24} color={COLORS.white} />
         </TouchableOpacity>
-        <Text style={styles.trackingTitle}>12034 SHATABDI EXP</Text>
+        <Text style={styles.trackingTitle} numberOfLines={1}>{trainName.toUpperCase()}</Text>
         <View style={{ width: 24 }}>
            <Feather name="bell" size={20} color={COLORS.white} />
         </View>
@@ -134,12 +161,12 @@ const TrackingResultsUI = ({ onBack, journeyData }: { onBack: () => void, journe
       {/* Top Summary Card (Fixed) */}
       <View style={[styles.trackingSummaryCard, { zIndex: 20 }]}>
         <View style={styles.trackingSummaryTopRow}>
-          <View>
+          <View style={{ flex: 1 }}>
             <Text style={styles.trackingSummaryLabel}>NEXT STOP</Text>
-            <Text style={styles.trackingSummaryStation}>KANPUR JN</Text>
-            <Text style={styles.trackingSummaryArrival}>ARRIVAL: 14:30</Text>
+            <Text style={styles.trackingSummaryStation} numberOfLines={1}>{nextStopName}</Text>
+            <Text style={styles.trackingSummaryArrival}>ARRIVAL: {nextStopArr}</Text>
           </View>
-          <Text style={styles.trackingSummaryUpdated}>Updated 2m ago</Text>
+          <Text style={styles.trackingSummaryUpdated}>Updated 1m ago</Text>
         </View>
       </View>
 
@@ -149,20 +176,24 @@ const TrackingResultsUI = ({ onBack, journeyData }: { onBack: () => void, journe
         <View style={styles.journeyProgressUnderline} />
 
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40, paddingHorizontal: 4 }}>
-          {mockStations.map((station, index) => {
+          {stations.map((station, index) => {
             const isFirst = index === 0;
-            const isLast = index === mockStations.length - 1;
+            const isLast = index === stations.length - 1;
             
             const isPassed = station.status === 'passed';
             const isCurrent = station.status === 'current';
             const isUpcoming = station.status === 'upcoming' || station.status === 'destination';
+            const isDest = station.status === 'destination';
+
+            const arrDisplay = station.actArrival || station.schArrival || station.time || '--:--';
+            const depDisplay = station.actArrival || '--:--'; // Could be refined if API provides departure
             
             return (
-              <View key={station.code} style={styles.timelineSegmentRow}>
+              <View key={`${station.code}-${index}`} style={styles.timelineSegmentRow}>
                 {/* 1. Left Col: Station Details */}
                 <View style={styles.timelineLeftCol}>
-                   <Text style={[styles.timelineStationName, isCurrent && { color: COLORS.navy }]}>{station.name}</Text>
-                   <Text style={styles.timelineDistance}>{station.distance}</Text>
+                   <Text style={[styles.timelineStationName, isCurrent && { color: COLORS.navy, fontWeight: '900' }]}>{station.name}</Text>
+                   <Text style={styles.timelineDistance}>{station.distance} km</Text>
                    <View style={styles.timelineAmenitiesRow}>
                      <View style={styles.timelineIconOutline}>
                         <MaterialCommunityIcons name="bed-outline" size={16} color={COLORS.navy} />
@@ -171,7 +202,7 @@ const TrackingResultsUI = ({ onBack, journeyData }: { onBack: () => void, journe
                         <MaterialCommunityIcons name="hospital-box-outline" size={16} color={COLORS.navy} />
                      </View>
                    </View>
-                   {station.status === 'destination' && (
+                   {isDest && (
                      <Text style={styles.timelineDestLabel}>DESTINATION</Text>
                    )}
                 </View>
@@ -190,6 +221,10 @@ const TrackingResultsUI = ({ onBack, journeyData }: { onBack: () => void, journe
                              <MaterialCommunityIcons name="train" size={16} color={COLORS.navy} />
                           </View>
                        </View>
+                     ) : isDest ? (
+                       <View style={[styles.nodeSolidCircle, { backgroundColor: COLORS.navy, width: 16, height: 16, borderRadius: 8 }]}>
+                         <MaterialCommunityIcons name="flag-variant" size={10} color={COLORS.white} />
+                       </View>
                      ) : (
                        <View style={[styles.nodeSolidCircle, { backgroundColor: COLORS.navy }]} />
                      )}
@@ -200,11 +235,11 @@ const TrackingResultsUI = ({ onBack, journeyData }: { onBack: () => void, journe
                 <View style={styles.timelineRightCol}>
                    <View style={styles.timeLabelContainer}>
                      <Text style={styles.timeLabelText}>ARR</Text>
-                     <Text style={[styles.timeValText, (isCurrent || isUpcoming) && station.arr !== '--:--' && { color: COLORS.red }]}>{station.arr}</Text>
+                     <Text style={[styles.timeValText, (isCurrent || isUpcoming) && arrDisplay !== '--:--' && { color: COLORS.red }]}>{arrDisplay}</Text>
                    </View>
                    <View style={styles.timeLabelContainer}>
-                     <Text style={styles.timeLabelText}>DEP</Text>
-                     <Text style={[styles.timeValText, (isCurrent || isUpcoming) && station.dep !== '--:--' && { color: COLORS.red }]}>{station.dep}</Text>
+                     <Text style={styles.timeLabelText}>PF</Text>
+                     <Text style={styles.timeValText}>{station.platform || 'TBA'}</Text>
                    </View>
                 </View>
               </View>
@@ -217,40 +252,15 @@ const TrackingResultsUI = ({ onBack, journeyData }: { onBack: () => void, journe
 };
 
 // --- SEARCH UI COMPONENT ---
-const SearchStateUI = ({ onBack, onSearch, activePnr, onViewActiveJourney }: { onBack: () => void, onSearch: (query: string, date: string) => void, activePnr: string | null, onViewActiveJourney: () => void }) => {
+const SearchStateUI = ({ onBack, onSearch, activePnr, onViewActiveJourney }: { onBack: () => void, onSearch: (query: string, startDayOffset: number) => void, activePnr: string | null, onViewActiveJourney: () => void }) => {
   const [trainQuery, setTrainQuery] = useState('');
+  const [startDayOffset, setStartDayOffset] = useState<number>(0);
 
-  const getFormattedDate = (date: Date) => {
-    const dayStr = date.getDate().toString().padStart(2, '0');
-    const monthStr = date.toLocaleString('en-US', { month: 'short' }).toUpperCase();
-    return `${dayStr} ${monthStr} ${date.getFullYear()}`;
-  };
-
-  const [selectedDate, setSelectedDate] = useState(getFormattedDate(new Date()));
-  
-  const [showCalendar, setShowCalendar] = useState(false);
-  const [selectedCalendarDate, setSelectedCalendarDate] = useState(new Date());
-
-  const weekDays = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
-  
-  const getDaysInMonth = (year: number, month: number) => new Date(year, month + 1, 0).getDate();
-  const getFirstDayOfMonth = (year: number, month: number) => new Date(year, month, 1).getDay();
-
-  const daysInMonth = getDaysInMonth(selectedCalendarDate.getFullYear(), selectedCalendarDate.getMonth());
-  const firstDay = getFirstDayOfMonth(selectedCalendarDate.getFullYear(), selectedCalendarDate.getMonth());
-  
-  const paddingDays = Array.from({length: firstDay}, (_, i) => i);
-  const actualDays = Array.from({length: daysInMonth}, (_, i) => i + 1);
-
-  const handlePrevMonth = () => setSelectedCalendarDate(new Date(selectedCalendarDate.getFullYear(), selectedCalendarDate.getMonth() - 1, 1));
-  const handleNextMonth = () => setSelectedCalendarDate(new Date(selectedCalendarDate.getFullYear(), selectedCalendarDate.getMonth() + 1, 1));
-
-  const handleDateSelect = (day: number) => {
-    const newDate = new Date(selectedCalendarDate.getFullYear(), selectedCalendarDate.getMonth(), day);
-    setSelectedCalendarDate(newDate);
-    setSelectedDate(getFormattedDate(newDate));
-    setShowCalendar(false);
-  };
+  const dateOptions = [
+    { label: 'Today', value: 0 },
+    { label: 'Yesterday', value: 1 },
+    { label: '2 Days Ago', value: 2 },
+  ];
 
   return (
     <View style={{ flex: 1, backgroundColor: COLORS.navy }}>
@@ -279,13 +289,23 @@ const SearchStateUI = ({ onBack, onSearch, activePnr, onViewActiveJourney }: { o
                />
              </View>
              
-             <Text style={styles.searchFieldLabel}>DEPARTURE DATE</Text>
-             <TouchableOpacity style={styles.searchDateInputRow} onPress={() => setShowCalendar(true)}>
-               <Feather name="calendar" size={16} color="#454652" />
-               <Text style={styles.searchDateValue}>{selectedDate}</Text>
-             </TouchableOpacity>
+             <Text style={styles.searchFieldLabel}>JOURNEY START DATE</Text>
+             <View style={styles.pillContainer}>
+               {dateOptions.map((opt) => {
+                 const isActive = startDayOffset === opt.value;
+                 return (
+                   <TouchableOpacity
+                     key={opt.value}
+                     style={[styles.pill, isActive && styles.pillActive]}
+                     onPress={() => setStartDayOffset(opt.value)}
+                   >
+                     <Text style={[styles.pillText, isActive && styles.pillTextActive]}>{opt.label}</Text>
+                   </TouchableOpacity>
+                 );
+               })}
+             </View>
 
-             <TouchableOpacity style={styles.searchSubmitBtn} onPress={() => onSearch(trainQuery, selectedDate)}>
+             <TouchableOpacity style={styles.searchSubmitBtn} onPress={() => onSearch(trainQuery, startDayOffset)}>
                <Text style={styles.searchSubmitBtnText}>CHECK STATUS</Text>
                <Feather name="arrow-right" size={16} color={COLORS.white} style={{ marginLeft: 8 }} />
              </TouchableOpacity>
@@ -327,42 +347,6 @@ const SearchStateUI = ({ onBack, onSearch, activePnr, onViewActiveJourney }: { o
            </TouchableOpacity>
         </View>
       </View>
-
-      <Modal visible={showCalendar} transparent animationType="fade">
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowCalendar(false)}>
-          <TouchableOpacity style={styles.calendarContainer} activeOpacity={1}>
-            <View style={styles.calendarHeader}>
-              <Text style={styles.calendarMonthText}>{selectedCalendarDate.toLocaleString('en-US', { month: 'long', year: 'numeric' })}</Text>
-              <View style={styles.calendarNav}>
-                <TouchableOpacity onPress={handlePrevMonth} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                  <Feather name="chevron-left" size={20} color={'#44474E'} style={{marginRight: 16}} />
-                </TouchableOpacity>
-                <TouchableOpacity onPress={handleNextMonth} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                  <Feather name="chevron-right" size={20} color={'#44474E'} />
-                </TouchableOpacity>
-              </View>
-            </View>
-            <View style={styles.weekDaysRow}>
-              {weekDays.map((d, i) => <Text key={i} style={styles.weekDayText}>{d}</Text>)}
-            </View>
-            <View style={styles.daysGrid}>
-              {paddingDays.map(i => <View key={`pad-${i}`} style={styles.dayCell} />)}
-              {actualDays.map((day) => {
-                const isSelected = day === selectedCalendarDate.getDate();
-                return (
-                  <TouchableOpacity 
-                    key={day} 
-                    style={[styles.dayCell, isSelected && styles.dayCellSelected]}
-                    onPress={() => handleDateSelect(day)}
-                  >
-                    <Text style={[styles.dayText, isSelected && styles.dayTextSelected]}>{day}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
     </View>
   );
 };
@@ -398,10 +382,33 @@ export default function LiveStatusScreen() {
   const [activePnr, setActivePnr] = useState<string | null>(route.params?.pnr || null);
   const [isInitializing, setIsInitializing] = useState(!route.params?.pnr);
   const [isTracking, setIsTracking] = useState(false);
+  const [selectedTrainNo, setSelectedTrainNo] = useState<string>('');
+  const [selectedStartDay, setSelectedStartDay] = useState<number>(0);
   
-  const handleInitiateSearch = (query: string, date: string) => {
+  const handleInitiateSearch = (query: string, startDayOffset: number) => {
+    const trimmed = query.trim();
+    if (trimmed.length === 10) {
+      // 10-digit input = PNR lookup
+      setActivePnr(trimmed);
+    } else {
+      // 4-5 digit input = Train number live status
+      setSelectedTrainNo(trimmed);
+      setSelectedStartDay(startDayOffset);
+    }
     setIsTracking(true);
   };
+
+  // Live Train Status query (fires when user searches)
+  const { data: liveTrainData, isLoading: isLiveLoading, isError: isLiveError } = useQuery({
+    queryKey: ['liveTrainStatus', selectedTrainNo, selectedStartDay],
+    queryFn: () => fetchLiveTrainStatus(selectedTrainNo, selectedStartDay),
+    enabled: isTracking && !!selectedTrainNo && selectedTrainNo.length >= 4,
+    staleTime: 60000,
+    refetchOnWindowFocus: false,
+    refetchInterval: 60000,
+    retry: 1,
+    retryDelay: 1000,
+  });
 
   useEffect(() => {
     if (!activePnr) {
@@ -557,8 +564,8 @@ export default function LiveStatusScreen() {
   const { data: fetchedJourney, isLoading, isError, error } = useQuery({
     queryKey: ['journey', activePnr],
     queryFn: () => fetchJourneyData(activePnr!),
-    // Strictly require a valid string to even attempt fetching
-    enabled: !!activePnr && activePnr !== 'null' && activePnr !== 'undefined',
+    // Strictly require a valid 10-digit PNR to even attempt fetching (prevents 5-digit train numbers from firing this)
+    enabled: !!activePnr && activePnr.length === 10 && activePnr !== 'null' && activePnr !== 'undefined',
     staleTime: 60000, 
     refetchOnWindowFocus: false,
     refetchInterval: 60000,
@@ -808,7 +815,7 @@ export default function LiveStatusScreen() {
   // --- RENDERS ---
   if (isInitializing) return <SafeAreaView style={styles.safeArea} />; // Blank while checking storage
   if (!isTracking) return <SearchStateUI activePnr={activePnr} onBack={() => navigation.goBack()} onSearch={(query, date) => handleInitiateSearch(query, date)} onViewActiveJourney={() => setIsTracking(true)} />;
-  if (isTracking) return <TrackingResultsUI onBack={() => setIsTracking(false)} journeyData={fetchedJourney} />;
+  if (isTracking) return <TrackingResultsUI onBack={() => { setIsTracking(false); setSelectedTrainNo(''); }} journeyData={liveTrainData} isLoading={isLiveLoading} isError={isLiveError} />;
 
   if (isError) {
     return <EmptyState text="Could not fetch journey details. Please check your network or enter a valid PNR." onBack={() => navigation.goBack()} />;
@@ -1635,18 +1642,11 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: COLORS.emerald,
   },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20 },
-  calendarContainer: { width: '100%', backgroundColor: 'white', borderRadius: 24, padding: 24, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 20, elevation: 5 },
-  calendarHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
-  calendarMonthText: { fontSize: 16, fontWeight: '900', color: COLORS.navy },
-  calendarNav: { flexDirection: 'row' },
-  weekDaysRow: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 12 },
-  weekDayText: { flex: 1, textAlign: 'center', fontSize: 12, fontWeight: '800', color: '#44474E' },
-  daysGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-start' },
-  dayCell: { width: `${100 / 7}%`, aspectRatio: 1, justifyContent: 'center', alignItems: 'center', padding: 2 },
-  dayCellSelected: { backgroundColor: COLORS.navy, borderRadius: 16 },
-  dayText: { fontSize: 14, fontWeight: '700', color: COLORS.navy },
-  dayTextSelected: { color: COLORS.white, fontWeight: '900' },
+  pillContainer: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 },
+  pill: { flex: 1, paddingVertical: 10, paddingHorizontal: 8, borderRadius: 8, borderWidth: 1, borderColor: COLORS.slateBorder, backgroundColor: COLORS.white, alignItems: 'center', marginHorizontal: 3 },
+  pillActive: { backgroundColor: COLORS.navy, borderColor: COLORS.navy },
+  pillText: { fontSize: 12, fontWeight: '700', color: COLORS.slateMuted },
+  pillTextActive: { color: COLORS.white },
   
   trackingOuter: { flex: 1, backgroundColor: COLORS.white },
   trackingHeaderBlock: { height: 100, backgroundColor: COLORS.navy, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 20 },
@@ -1675,7 +1675,7 @@ const styles = StyleSheet.create({
   timelineLineTop: { position: 'absolute', top: 0, height: 14, width: 12, borderRadius: 0 },
   timelineLineBottom: { position: 'absolute', top: 14, bottom: 0, width: 12, borderRadius: 0 },
   nodeAbsoluteContainer: { position: 'absolute', top: 4, width: 20, height: 20, justifyContent: 'center', alignItems: 'center' },
-  nodeSolidCircle: { width: 12, height: 12, borderRadius: 6 },
+  nodeSolidCircle: { width: 12, height: 12, borderRadius: 6, justifyContent: 'center', alignItems: 'center' },
   nodeOuterLayer: { width: 30, height: 30, borderRadius: 15, backgroundColor: COLORS.white, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: COLORS.navy },
   nodeInnerCircle: { width: 20, height: 20, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
 
