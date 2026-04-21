@@ -15,6 +15,8 @@ import {
   Switch,
   Alert,
   Linking,
+  TextInput,
+  Modal,
 } from 'react-native';
 import { MaterialCommunityIcons, Feather } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -103,6 +105,268 @@ function getConfidence({ isMoving, isNearRoute, accuracy }: { isMoving: boolean;
   return 'MEDIUM';
 }
 
+// --- TRACKING RESULTS UI COMPONENT ---
+const TrackingResultsUI = ({ onBack, journeyData }: { onBack: () => void, journeyData: any }) => {
+  const mockStations = [
+    { code: 'NDLS', name: 'NEW DELHI', distance: '0 km', arr: '--:--', dep: '08:00', status: 'passed' },
+    { code: 'ALJN', name: 'ALIGARH JN', distance: '131 km', arr: '11:45', dep: '11:47', status: 'passed' },
+    { code: 'CNB', name: 'KANPUR JN', distance: '440 km', arr: '14:45', dep: '14:50', status: 'current' },
+    { code: 'PRYJ', name: 'PRAYAGRAJ JN', distance: '634 km', arr: '17:10', dep: '17:15', status: 'upcoming' },
+    { code: 'BSB', name: 'VARANASI JN', distance: '770 km', arr: '20:30', dep: '--:--', status: 'destination' },
+  ];
+
+  return (
+    <View style={styles.trackingOuter}>
+      <SafeAreaView style={{ flex: 0, backgroundColor: COLORS.navy }} />
+      <StatusBar barStyle="light-content" backgroundColor={COLORS.navy} />
+      
+      {/* Header */}
+      <View style={[styles.trackingHeaderBlock, { paddingBottom: 40 }]}>
+        <TouchableOpacity onPress={onBack} hitSlop={{top:10,bottom:10,left:10,right:10}}>
+          <Feather name="arrow-left" size={24} color={COLORS.white} />
+        </TouchableOpacity>
+        <Text style={styles.trackingTitle}>12034 SHATABDI EXP</Text>
+        <View style={{ width: 24 }}>
+           <Feather name="bell" size={20} color={COLORS.white} />
+        </View>
+      </View>
+
+      {/* Top Summary Card (Fixed) */}
+      <View style={[styles.trackingSummaryCard, { zIndex: 20 }]}>
+        <View style={styles.trackingSummaryTopRow}>
+          <View>
+            <Text style={styles.trackingSummaryLabel}>NEXT STOP</Text>
+            <Text style={styles.trackingSummaryStation}>KANPUR JN</Text>
+            <Text style={styles.trackingSummaryArrival}>ARRIVAL: 14:30</Text>
+          </View>
+          <Text style={styles.trackingSummaryUpdated}>Updated 2m ago</Text>
+        </View>
+      </View>
+
+      {/* Timeline Inner Content (Fixed Title, Scrollable Stations) */}
+      <View style={styles.timelineWhiteBg}>
+        <Text style={styles.journeyProgressTitle}>JOURNEY PROGRESS</Text>
+        <View style={styles.journeyProgressUnderline} />
+
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40, paddingHorizontal: 4 }}>
+          {mockStations.map((station, index) => {
+            const isFirst = index === 0;
+            const isLast = index === mockStations.length - 1;
+            
+            const isPassed = station.status === 'passed';
+            const isCurrent = station.status === 'current';
+            const isUpcoming = station.status === 'upcoming' || station.status === 'destination';
+            
+            return (
+              <View key={station.code} style={styles.timelineSegmentRow}>
+                {/* 1. Left Col: Station Details */}
+                <View style={styles.timelineLeftCol}>
+                   <Text style={[styles.timelineStationName, isCurrent && { color: COLORS.navy }]}>{station.name}</Text>
+                   <Text style={styles.timelineDistance}>{station.distance}</Text>
+                   <View style={styles.timelineAmenitiesRow}>
+                     <View style={styles.timelineIconOutline}>
+                        <MaterialCommunityIcons name="bed-outline" size={16} color={COLORS.navy} />
+                     </View>
+                     <View style={[styles.timelineIconOutline, { marginLeft: 8 }]}>
+                        <MaterialCommunityIcons name="hospital-box-outline" size={16} color={COLORS.navy} />
+                     </View>
+                   </View>
+                   {station.status === 'destination' && (
+                     <Text style={styles.timelineDestLabel}>DESTINATION</Text>
+                   )}
+                </View>
+
+                {/* 2. Center Col: Timeline Graphics */}
+                <View style={styles.timelineCenterCol}>
+                   {/* Track Lines */}
+                   {!isFirst && <View style={[styles.timelineLineTop, { backgroundColor: (isPassed || isCurrent) ? COLORS.navy : '#CBD5E1', opacity: (isPassed || isCurrent) ? 0.4 : 1 }]} />}
+                   {!isLast && <View style={[styles.timelineLineBottom, { backgroundColor: isPassed ? COLORS.navy : '#CBD5E1', opacity: isPassed ? 0.4 : 1 }]} />}
+                   
+                   {/* Node Circle */}
+                   <View style={styles.nodeAbsoluteContainer}>
+                     {isCurrent ? (
+                       <View style={styles.nodeOuterLayer}>
+                          <View style={styles.nodeInnerCircle}>
+                             <MaterialCommunityIcons name="train" size={16} color={COLORS.navy} />
+                          </View>
+                       </View>
+                     ) : (
+                       <View style={[styles.nodeSolidCircle, { backgroundColor: COLORS.navy }]} />
+                     )}
+                   </View>
+                </View>
+
+                {/* 3. Right Col: ARR/DEP Timing */}
+                <View style={styles.timelineRightCol}>
+                   <View style={styles.timeLabelContainer}>
+                     <Text style={styles.timeLabelText}>ARR</Text>
+                     <Text style={[styles.timeValText, (isCurrent || isUpcoming) && station.arr !== '--:--' && { color: COLORS.red }]}>{station.arr}</Text>
+                   </View>
+                   <View style={styles.timeLabelContainer}>
+                     <Text style={styles.timeLabelText}>DEP</Text>
+                     <Text style={[styles.timeValText, (isCurrent || isUpcoming) && station.dep !== '--:--' && { color: COLORS.red }]}>{station.dep}</Text>
+                   </View>
+                </View>
+              </View>
+            );
+          })}
+        </ScrollView>
+      </View>
+    </View>
+  );
+};
+
+// --- SEARCH UI COMPONENT ---
+const SearchStateUI = ({ onBack, onSearch, activePnr, onViewActiveJourney }: { onBack: () => void, onSearch: (query: string, date: string) => void, activePnr: string | null, onViewActiveJourney: () => void }) => {
+  const [trainQuery, setTrainQuery] = useState('');
+
+  const getFormattedDate = (date: Date) => {
+    const dayStr = date.getDate().toString().padStart(2, '0');
+    const monthStr = date.toLocaleString('en-US', { month: 'short' }).toUpperCase();
+    return `${dayStr} ${monthStr} ${date.getFullYear()}`;
+  };
+
+  const [selectedDate, setSelectedDate] = useState(getFormattedDate(new Date()));
+  
+  const [showCalendar, setShowCalendar] = useState(false);
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState(new Date());
+
+  const weekDays = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+  
+  const getDaysInMonth = (year: number, month: number) => new Date(year, month + 1, 0).getDate();
+  const getFirstDayOfMonth = (year: number, month: number) => new Date(year, month, 1).getDay();
+
+  const daysInMonth = getDaysInMonth(selectedCalendarDate.getFullYear(), selectedCalendarDate.getMonth());
+  const firstDay = getFirstDayOfMonth(selectedCalendarDate.getFullYear(), selectedCalendarDate.getMonth());
+  
+  const paddingDays = Array.from({length: firstDay}, (_, i) => i);
+  const actualDays = Array.from({length: daysInMonth}, (_, i) => i + 1);
+
+  const handlePrevMonth = () => setSelectedCalendarDate(new Date(selectedCalendarDate.getFullYear(), selectedCalendarDate.getMonth() - 1, 1));
+  const handleNextMonth = () => setSelectedCalendarDate(new Date(selectedCalendarDate.getFullYear(), selectedCalendarDate.getMonth() + 1, 1));
+
+  const handleDateSelect = (day: number) => {
+    const newDate = new Date(selectedCalendarDate.getFullYear(), selectedCalendarDate.getMonth(), day);
+    setSelectedCalendarDate(newDate);
+    setSelectedDate(getFormattedDate(newDate));
+    setShowCalendar(false);
+  };
+
+  return (
+    <View style={{ flex: 1, backgroundColor: COLORS.navy }}>
+      <SafeAreaView style={{ flex: 0, backgroundColor: COLORS.navy }} />
+      <View style={styles.searchContainer}>
+        <StatusBar barStyle="light-content" backgroundColor={COLORS.navy} />
+        <View style={styles.searchHeader}>
+          <TouchableOpacity onPress={onBack} style={styles.searchHeaderIconBtn}>
+            <Feather name="arrow-left" size={24} color={COLORS.white} />
+          </TouchableOpacity>
+          <Text style={styles.searchHeaderTitle}>TRAIN STATUS</Text>
+          <View style={styles.searchHeaderIconBtn}><View style={{ width: 24 }} /></View>
+        </View>
+
+        <View style={styles.searchCardContainer}>
+           <View style={styles.searchCard}>
+             <Text style={styles.searchFieldLabel}>TRAIN NUMBER</Text>
+             <View style={styles.searchInputRow}>
+               <Feather name="search" size={16} color="#44474E" />
+               <TextInput
+                 style={styles.searchTextInp}
+                 placeholder="e.g. 12034"
+                 placeholderTextColor="#44474E"
+                 value={trainQuery}
+                 onChangeText={setTrainQuery}
+               />
+             </View>
+             
+             <Text style={styles.searchFieldLabel}>DEPARTURE DATE</Text>
+             <TouchableOpacity style={styles.searchDateInputRow} onPress={() => setShowCalendar(true)}>
+               <Feather name="calendar" size={16} color="#454652" />
+               <Text style={styles.searchDateValue}>{selectedDate}</Text>
+             </TouchableOpacity>
+
+             <TouchableOpacity style={styles.searchSubmitBtn} onPress={() => onSearch(trainQuery, selectedDate)}>
+               <Text style={styles.searchSubmitBtnText}>CHECK STATUS</Text>
+               <Feather name="arrow-right" size={16} color={COLORS.white} style={{ marginLeft: 8 }} />
+             </TouchableOpacity>
+           </View>
+           
+           {activePnr && (
+             <View style={styles.activeJourneyCard}>
+               <View style={styles.activeJourneyLeft}>
+                 <MaterialCommunityIcons name="ticket-confirmation-outline" size={24} color={COLORS.emerald} />
+                 <View style={styles.activeJourneyTextCol}>
+                   <Text style={styles.activeJourneyTitle}>Active Ticket Detected</Text>
+                   <Text style={styles.activeJourneySub}>PNR: {activePnr}</Text>
+                 </View>
+               </View>
+               <TouchableOpacity style={styles.activeJourneyBtn} onPress={onViewActiveJourney}>
+                 <Text style={styles.activeJourneyBtnText}>TRACK LIVE</Text>
+                 <Feather name="arrow-right" size={14} color={COLORS.emerald} style={{ marginLeft: 4 }} />
+               </TouchableOpacity>
+             </View>
+           )}
+
+           <View style={styles.searchRecentHeaderRow}>
+             <View style={styles.searchRecentTitleGroup}>
+               <View style={styles.searchRecentIndicator} />
+               <Text style={styles.searchRecentTitle}>RECENT SEARCHES</Text>
+             </View>
+           </View>
+           
+           <TouchableOpacity style={styles.searchRecentItem}>
+             <Feather name="clock" size={18} color="#454652" />
+             <Text style={styles.searchRecentItemText}>12034 SHATABDI EXP</Text>
+             <Feather name="chevron-right" size={18} color="#454652" style={{ marginLeft: 'auto' }} />
+           </TouchableOpacity>
+           
+           <TouchableOpacity style={[styles.searchRecentItem, { backgroundColor: '#F8F9FA' }]}>
+             <Feather name="clock" size={18} color="#454652" />
+             <Text style={styles.searchRecentItemText}>12951 RAJDHANI EXP</Text>
+             <Feather name="chevron-right" size={18} color="#454652" style={{ marginLeft: 'auto' }} />
+           </TouchableOpacity>
+        </View>
+      </View>
+
+      <Modal visible={showCalendar} transparent animationType="fade">
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowCalendar(false)}>
+          <TouchableOpacity style={styles.calendarContainer} activeOpacity={1}>
+            <View style={styles.calendarHeader}>
+              <Text style={styles.calendarMonthText}>{selectedCalendarDate.toLocaleString('en-US', { month: 'long', year: 'numeric' })}</Text>
+              <View style={styles.calendarNav}>
+                <TouchableOpacity onPress={handlePrevMonth} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                  <Feather name="chevron-left" size={20} color={'#44474E'} style={{marginRight: 16}} />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={handleNextMonth} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                  <Feather name="chevron-right" size={20} color={'#44474E'} />
+                </TouchableOpacity>
+              </View>
+            </View>
+            <View style={styles.weekDaysRow}>
+              {weekDays.map((d, i) => <Text key={i} style={styles.weekDayText}>{d}</Text>)}
+            </View>
+            <View style={styles.daysGrid}>
+              {paddingDays.map(i => <View key={`pad-${i}`} style={styles.dayCell} />)}
+              {actualDays.map((day) => {
+                const isSelected = day === selectedCalendarDate.getDate();
+                return (
+                  <TouchableOpacity 
+                    key={day} 
+                    style={[styles.dayCell, isSelected && styles.dayCellSelected]}
+                    onPress={() => handleDateSelect(day)}
+                  >
+                    <Text style={[styles.dayText, isSelected && styles.dayTextSelected]}>{day}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+    </View>
+  );
+};
+
 // --- SMOOTH TRAIN DOT COMPONENT ---
 const SmoothTrainDot = ({ targetOffset }: { targetOffset: number }) => {
   const translateYAnim = useRef(new Animated.Value(targetOffset)).current;
@@ -133,6 +397,11 @@ export default function LiveStatusScreen() {
   const route = useRoute<any>();
   const [activePnr, setActivePnr] = useState<string | null>(route.params?.pnr || null);
   const [isInitializing, setIsInitializing] = useState(!route.params?.pnr);
+  const [isTracking, setIsTracking] = useState(false);
+  
+  const handleInitiateSearch = (query: string, date: string) => {
+    setIsTracking(true);
+  };
 
   useEffect(() => {
     if (!activePnr) {
@@ -538,7 +807,8 @@ export default function LiveStatusScreen() {
 
   // --- RENDERS ---
   if (isInitializing) return <SafeAreaView style={styles.safeArea} />; // Blank while checking storage
-  if (!activePnr) return <EmptyState text="Enter PNR to start tracking" onBack={() => navigation.navigate('Dashboard')} />;
+  if (!isTracking) return <SearchStateUI activePnr={activePnr} onBack={() => navigation.goBack()} onSearch={(query, date) => handleInitiateSearch(query, date)} onViewActiveJourney={() => setIsTracking(true)} />;
+  if (isTracking) return <TrackingResultsUI onBack={() => setIsTracking(false)} journeyData={fetchedJourney} />;
 
   if (isError) {
     return <EmptyState text="Could not fetch journey details. Please check your network or enter a valid PNR." onBack={() => navigation.goBack()} />;
@@ -1194,4 +1464,223 @@ const styles = StyleSheet.create({
     elevation: 8,
     zIndex: 100,
   },
+  searchContainer: {
+    flex: 1,
+    backgroundColor: '#F8F9FA'
+  },
+  searchHeader: {
+    backgroundColor: COLORS.navy,
+    height: 120,
+    paddingHorizontal: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingBottom: 40 // padding to allow the card to overlap the header cleanly
+  },
+  searchHeaderIconBtn: {
+    padding: 4,
+  },
+  searchHeaderTitle: {
+    color: COLORS.white,
+    fontSize: 16,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  searchCardContainer: {
+    paddingHorizontal: 20,
+    marginTop: -40,
+    flex: 1,
+  },
+  searchCard: {
+    backgroundColor: COLORS.white,
+    borderRadius: 16,
+    padding: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 4,
+    marginBottom: 30
+  },
+  searchFieldLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#1A1C1C',
+    letterSpacing: 0.5,
+    marginBottom: 8,
+    marginTop: 16
+  },
+  searchInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F3F3F3',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  searchTextInp: {
+    flex: 1,
+    marginLeft: 10,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1A1C1C'
+  },
+  searchDateInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F3F3F3',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  searchDateValue: {
+    marginLeft: 10,
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1A1C1C'
+  },
+  searchSubmitBtn: {
+    backgroundColor: COLORS.navy,
+    borderRadius: 8,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 16,
+    marginTop: 24
+  },
+  searchSubmitBtnText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 1
+  },
+  searchRecentHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16
+  },
+  searchRecentTitleGroup: {
+    flexDirection: 'row',
+    alignItems: 'center'
+  },
+  searchRecentIndicator: {
+    width: 4,
+    height: 12,
+    backgroundColor: COLORS.navy,
+    marginRight: 8,
+    borderRadius: 2
+  },
+  searchRecentTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    color: '#44474E'
+  },
+  searchRecentItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    marginBottom: 8
+  },
+  searchRecentItemText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#1A1C1C',
+    marginLeft: 12
+  },
+  activeJourneyCard: {
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    borderRadius: 12,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 24,
+  },
+  activeJourneyLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  activeJourneyTextCol: {
+    marginLeft: 12,
+  },
+  activeJourneyTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#064E3B',
+  },
+  activeJourneySub: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#047857',
+    marginTop: 2,
+  },
+  activeJourneyBtn: {
+    backgroundColor: '#D1FAE5',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  activeJourneyBtnText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: COLORS.emerald,
+  },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20 },
+  calendarContainer: { width: '100%', backgroundColor: 'white', borderRadius: 24, padding: 24, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 20, elevation: 5 },
+  calendarHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+  calendarMonthText: { fontSize: 16, fontWeight: '900', color: COLORS.navy },
+  calendarNav: { flexDirection: 'row' },
+  weekDaysRow: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 12 },
+  weekDayText: { flex: 1, textAlign: 'center', fontSize: 12, fontWeight: '800', color: '#44474E' },
+  daysGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-start' },
+  dayCell: { width: `${100 / 7}%`, aspectRatio: 1, justifyContent: 'center', alignItems: 'center', padding: 2 },
+  dayCellSelected: { backgroundColor: COLORS.navy, borderRadius: 16 },
+  dayText: { fontSize: 14, fontWeight: '700', color: COLORS.navy },
+  dayTextSelected: { color: COLORS.white, fontWeight: '900' },
+  
+  trackingOuter: { flex: 1, backgroundColor: COLORS.white },
+  trackingHeaderBlock: { height: 100, backgroundColor: COLORS.navy, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 20 },
+  trackingTitle: { color: COLORS.white, fontSize: 16, fontWeight: '900', letterSpacing: 0.5 },
+  trackingScrollContent: { paddingBottom: 40 },
+  trackingSummaryCard: { backgroundColor: COLORS.white, borderRadius: 16, marginHorizontal: 20, marginTop: -30, padding: 24, shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.1, shadowRadius: 10, elevation: 8, zIndex: 10 },
+  trackingSummaryTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  trackingSummaryLabel: { fontSize: 10, fontWeight: '800', color: '#44474E', letterSpacing: 0.5, marginBottom: 4 },
+  trackingSummaryStation: { fontSize: 22, fontWeight: '900', color: '#1A1C1C', marginBottom: 6 },
+  trackingSummaryArrival: { fontSize: 12, fontWeight: '700', color: '#44474E' },
+  trackingSummaryUpdated: { fontSize: 10, fontWeight: '700', color: '#64748B', marginTop: 4 },
+  
+  timelineWhiteBg: { flex: 1, backgroundColor: COLORS.white, marginHorizontal: 20, marginTop: 16, borderRadius: 16, paddingTop: 24, paddingHorizontal: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 5, elevation: 4 },
+  journeyProgressTitle: { textAlign: 'center', fontSize: 11, fontWeight: '800', color: '#44474E', letterSpacing: 1 },
+  journeyProgressUnderline: { width: 120, height: 1, backgroundColor: '#E2E8F0', alignSelf: 'center', marginTop: 8, marginBottom: 32 },
+
+  timelineSegmentRow: { flexDirection: 'row', minHeight: 110 },
+  timelineLeftCol: { flex: 1, paddingTop: 4 },
+  timelineStationName: { fontSize: 14, fontWeight: '800', color: '#1A1C1C', marginBottom: 4 },
+  timelineDistance: { fontSize: 13, fontWeight: '600', color: '#64748B', marginBottom: 12 },
+  timelineAmenitiesRow: { flexDirection: 'row', alignItems: 'center' },
+  timelineIconOutline: { borderWidth: 1.5, borderColor: '#CBD5E1', borderRadius: 4, padding: 2 },
+  timelineDestLabel: { marginTop: 12, fontSize: 10, fontWeight: '800', color: COLORS.navy, letterSpacing: 0.5 },
+
+  timelineCenterCol: { width: 60, position: 'relative', alignItems: 'center' },
+  timelineLineTop: { position: 'absolute', top: 0, height: 14, width: 12, borderRadius: 0 },
+  timelineLineBottom: { position: 'absolute', top: 14, bottom: 0, width: 12, borderRadius: 0 },
+  nodeAbsoluteContainer: { position: 'absolute', top: 4, width: 20, height: 20, justifyContent: 'center', alignItems: 'center' },
+  nodeSolidCircle: { width: 12, height: 12, borderRadius: 6 },
+  nodeOuterLayer: { width: 30, height: 30, borderRadius: 15, backgroundColor: COLORS.white, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: COLORS.navy },
+  nodeInnerCircle: { width: 20, height: 20, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+
+  timelineRightCol: { width: 110, alignItems: 'flex-end', paddingTop: 6 },
+  timeLabelContainer: { flexDirection: 'row', alignItems: 'center', marginBottom: 8, justifyContent: 'space-between', width: '100%' },
+  timeLabelText: { fontSize: 11, fontWeight: '800', color: '#44474E' },
+  timeValText: { fontSize: 14, fontWeight: '800', color: '#1A1C1C', textAlign: 'right' }
 });
