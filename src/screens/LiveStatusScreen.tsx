@@ -110,7 +110,7 @@ const TrackingResultsUI = ({
   onBack, onRefresh, journeyData, isLoading, isError, errorMessage, 
   activeGpsProgress, isBoarded 
 }: { 
-  onBack: () => void, onRefresh: () => void, journeyData: any, isLoading: boolean, isError: boolean, errorMessage?: string,
+  onBack: () => void, onRefresh: () => void, journeyData: LiveTrainData | JourneyAPIData | null | undefined, isLoading: boolean, isError: boolean, errorMessage?: string,
   activeGpsProgress?: { currentIndex: number; distFromPrev: number; distToNext: number } | null,
   isBoarded?: boolean
 }) => {
@@ -118,51 +118,52 @@ const TrackingResultsUI = ({
   const trainGlideAnim = useRef(new Animated.Value(0)).current;
 
   // Derive summary info from stations
-  const stations = journeyData?.stations || [];
+  const stations: JourneyStation[] = journeyData?.stations || [];
   const trainName = journeyData?.trainName || 'Loading...';
-  const currentStation = stations.find(s => s.status === 'current');
-  const nextUpcoming = stations.find(s => s.status === 'upcoming');
+  const currentStation = stations.find((s: JourneyStation) => s.status === 'current');
+  const nextUpcoming = stations.find((s: JourneyStation) => s.status === 'upcoming');
   const nextStopName = nextUpcoming?.name || currentStation?.name || '—';
   const nextStopArr = nextUpcoming?.schArrival || currentStation?.schArrival || '--:--';
 
-  let calculatedTrainOffset = 0;
-
-  stations.forEach((station: any, index: number) => {
+  let calculatedTargetOffset = 0;
+  stations.forEach((station: JourneyStation, index: number) => {
     const isLast = index === stations.length - 1;
+    let segmentHeight = MIN_HEIGHT;
+    if (!isLast) {
+      const nextStation = stations[index + 1];
+      const physicalDist = (nextStation.distance || 0) - (station.distance || 0);
+      segmentHeight = normalize(physicalDist, MIN_HEIGHT, MAX_HEIGHT);
+    }
+
     const isGpsActiveNode = isBoarded && activeGpsProgress && index === activeGpsProgress.currentIndex;
     const isApiActiveNode = !isBoarded && station.status === 'current';
 
-    if ((isGpsActiveNode || isApiActiveNode) && !isLast) {
+    if (isGpsActiveNode && !isLast) {
+      const dPrev = activeGpsProgress.distFromPrev || 0;
+      const dNext = activeGpsProgress.distToNext || 1; 
+      const percentComplete = Math.max(0, Math.min(1, dPrev / (dPrev + dNext)));
+      calculatedTargetOffset = percentComplete * segmentHeight;
+    } else if (isApiActiveNode && !isLast) {
       const nextStation = stations[index + 1];
-      const physicalDist = (nextStation.distance || 0) - (station.distance || 0);
-      const segmentHeight = normalize(physicalDist, MIN_HEIGHT, MAX_HEIGHT);
-
-      if (isGpsActiveNode) {
-        const dPrev = activeGpsProgress.distFromPrev || 0;
-        const dNext = activeGpsProgress.distToNext || 0; 
-        const denom = (dPrev + dNext);
-        const percentComplete = denom > 0 ? Math.max(0, Math.min(1, dPrev / denom)) : 0;
-        calculatedTrainOffset = (percentComplete * segmentHeight) || 0;
-      } else {
-        const totalSegmentDist = physicalDist;
-        const trainProgressDist = (journeyData?.currentDistance || station.distance || 0) - (station.distance || 0);
-        let progressRatio = 0;
-        if (totalSegmentDist > 0 && trainProgressDist > 0) {
-          progressRatio = Math.min(1, Math.max(0, trainProgressDist / totalSegmentDist));
-        }
-        calculatedTrainOffset = (progressRatio * segmentHeight) || 0;
+      const totalSegmentDist = (nextStation.distance || 0) - (station.distance || 0);
+      const trainProgressDist = ((journeyData as any)?.currentDistance || station.distance || 0) - (station.distance || 0);
+      
+      let progressRatio = 0;
+      if (totalSegmentDist > 0 && trainProgressDist > 0) {
+        progressRatio = Math.min(1, Math.max(0, trainProgressDist / totalSegmentDist));
       }
+      calculatedTargetOffset = progressRatio * segmentHeight;
     }
   });
 
   useEffect(() => {
     Animated.spring(trainGlideAnim, {
-      toValue: calculatedTrainOffset || 0,
+      toValue: calculatedTargetOffset,
       friction: 6,
       tension: 40,
       useNativeDriver: true,
     }).start();
-  }, [journeyData?.currentDistance, activeGpsProgress, calculatedTrainOffset, trainGlideAnim]); 
+  }, [calculatedTargetOffset, trainGlideAnim]); 
 
   if (isLoading) {
     return (
@@ -176,7 +177,7 @@ const TrackingResultsUI = ({
   }
 
   // --- SCHEDULED / Upcoming Journey (train hasn't departed yet) ---
-  if (!isError && journeyData && (journeyData.status === 'SCHEDULED' || stations.length === 0)) {
+  if (!isError && journeyData && ((journeyData as any).status === 'SCHEDULED' || stations.length === 0)) {
     return (
       <SafeAreaView style={[styles.safeArea, { alignItems: 'center', justifyContent: 'center', flex: 1, backgroundColor: COLORS.navy }]}>
         <StatusBar barStyle="light-content" backgroundColor={COLORS.navy} />
@@ -242,7 +243,7 @@ const TrackingResultsUI = ({
         <View style={styles.journeyProgressUnderline} />
 
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40, paddingHorizontal: 4 }}>
-          {stations.map((station, index) => {
+          {stations.map((station: JourneyStation, index: number) => {
             const isFirst = index === 0;
             const isLast = index === stations.length - 1;
             
@@ -264,6 +265,7 @@ const TrackingResultsUI = ({
 
             const isGpsActiveNode = isBoarded && activeGpsProgress && index === activeGpsProgress.currentIndex;
             const isApiActiveNode = !isBoarded && station.status === 'current';
+
             
             return (
               <View key={`${station.code}-${index}`} style={[styles.timelineSegmentRow, { height: isLast ? MIN_HEIGHT : segmentHeight }]}>
@@ -312,21 +314,10 @@ const TrackingResultsUI = ({
                    {/* Node Circle */}
                    <View style={styles.nodeAbsoluteContainer}>
                      {(isGpsActiveNode || isApiActiveNode) ? (
-                       <Animated.View 
-                         style={[
-                           { 
-                             position: 'absolute', 
-                             zIndex: 20, 
-                             alignSelf: 'center',
-                             transform: [{ translateY: trainGlideAnim }] 
-                           }
-                         ]}
-                       >
-                         <View style={styles.nodeOuterLayer}>
-                            <View style={styles.nodeInnerCircle}>
-                               <MaterialCommunityIcons name="train" size={16} color={COLORS.navy} />
-                            </View>
-                         </View>
+                       <Animated.View style={[styles.nodeOuterLayer, { position: 'absolute', zIndex: 20, transform: [{ translateY: trainGlideAnim }] }]}>
+                          <View style={styles.nodeInnerCircle}>
+                             <MaterialCommunityIcons name="train" size={16} color={COLORS.navy} />
+                          </View>
                        </Animated.View>
                      ) : isDest ? (
                        <View style={[styles.nodeSolidCircle, { backgroundColor: COLORS.navy, width: 16, height: 16, borderRadius: 8 }]}>
@@ -589,8 +580,7 @@ export default function LiveStatusScreen() {
     queryFn: () => fetchLiveTrainStatus(selectedTrainNo, selectedStartDay),
     enabled: isTracking && !!selectedTrainNo && selectedTrainNo.length >= 4,
     staleTime: 60000,
-    refetchOnWindowFocus: false,
-    refetchInterval: 60000,
+    refetchOnWindowFocus: true, // Refetch when app comes to foreground
     retry: 1,
     retryDelay: 1000,
   });
@@ -822,8 +812,7 @@ export default function LiveStatusScreen() {
     // Strictly require a valid 10-digit PNR to even attempt fetching (prevents 5-digit train numbers from firing this)
     enabled: !!activePnr && activePnr.length === 10 && activePnr !== 'null' && activePnr !== 'undefined',
     staleTime: 60000, 
-    refetchOnWindowFocus: false,
-    refetchInterval: 60000,
+    refetchOnWindowFocus: true,
     retry: 1, // Reduce to 1 retry so it fails fast and shows the error UI
     retryDelay: 1000,
   });
@@ -928,7 +917,8 @@ export default function LiveStatusScreen() {
           LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
           return {
             currentIndex: Math.max(idx, prev?.currentIndex || 0),
-            distanceToNext: 0,
+            distFromPrev: 0,
+            distToNext: 0,
           };
         });
         setJState('ACTIVE');
@@ -1234,9 +1224,9 @@ export default function LiveStatusScreen() {
     );
   }
 
-  const stations = journey.stations;
-  const nextStationIndex = progress ? Math.min(progress.currentIndex + 1, stations.length - 1) : 0;
-  const nextStationName = stations[nextStationIndex]?.name;
+  const stations = trackingStations;
+  const nextStationIndex = progress ? Math.min(progress.currentIndex + 1, Math.max(0, stations.length - 1)) : 0;
+  const nextStationName = stations[nextStationIndex]?.name || '—';
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -1254,8 +1244,8 @@ export default function LiveStatusScreen() {
 
         <View style={styles.trainInfoRow}>
           <Text style={styles.liveTrackingText}>LIVE TRACKING</Text>
-          <Text style={styles.trainNumberName}>{journey.trainName}</Text>
-          {journey.statusMessage ? (
+          <Text style={styles.trainNumberName}>{trackingTrainName}</Text>
+          {journey?.statusMessage ? (
             <Text style={styles.statusMessage}>{journey.statusMessage}</Text>
           ) : null}
         </View>
@@ -1275,7 +1265,10 @@ export default function LiveStatusScreen() {
             <View style={styles.focusMetricBorder} />
             <View style={styles.focusMetric}>
               <Text style={styles.metricLabel}>DISTANCE</Text>
-              <Text style={styles.metricValue}>{progress?.distanceToNext ?? '--'} <Text style={{ fontSize: 14 }}>KM</Text></Text>
+              <Text style={styles.metricValue}>
+                {typeof progress?.distToNext === 'number' ? Math.round(progress.distToNext) : '--'} 
+                <Text style={{ fontSize: 14 }}> KM</Text>
+              </Text>
             </View>
           </View>
           <View style={styles.focusCardDivider} />
@@ -1341,10 +1334,9 @@ export default function LiveStatusScreen() {
               // Calculate Train Positioning
               let trainTopOffset = 0;
               if (isActiveNode && !isLast) {
-                const nextStation = stations[index + 1];
-                const totalSegmentDist = nextStation?.distance - station.distance || 1;
-                const coveredDist = totalSegmentDist - (progress?.distanceToNext || 0);
-                const percentComplete = Math.max(0, Math.min(1, coveredDist / totalSegmentDist));
+                const dPrev = progress?.distFromPrev || 0;
+                const dNext = progress?.distToNext || 1; // prevent div by zero
+                const percentComplete = Math.max(0, Math.min(1, dPrev / (dPrev + dNext)));
                 trainTopOffset = percentComplete * segmentHeight;
               }
 
@@ -1411,7 +1403,7 @@ export default function LiveStatusScreen() {
 
                     {isActiveNode && (
                       <Text style={styles.status}>
-                        {progress?.distanceToNext ? `${progress.distanceToNext} KM REMAINING` : 'REACHING SHORTLY'}
+                        {progress?.distToNext !== undefined ? `${Math.round(progress.distToNext)} KM REMAINING` : 'REACHING SHORTLY'}
                       </Text>
                     )}
                     {isPassed && !isActiveNode && (
