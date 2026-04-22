@@ -16,7 +16,7 @@ import {
   Alert,
   Linking,
   TextInput,
-
+  Modal,
 } from 'react-native';
 import { MaterialCommunityIcons, Feather } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -106,7 +106,8 @@ function getConfidence({ isMoving, isNearRoute, accuracy }: { isMoving: boolean;
 }
 
 // --- TRACKING RESULTS UI COMPONENT ---
-const TrackingResultsUI = ({ onBack, journeyData, isLoading, isError }: { onBack: () => void, journeyData: LiveTrainData | null | undefined, isLoading: boolean, isError: boolean }) => {
+const TrackingResultsUI = ({ onBack, journeyData, isLoading, isError, errorMessage }: { onBack: () => void, journeyData: LiveTrainData | null | undefined, isLoading: boolean, isError: boolean, errorMessage?: string }) => {
+  const navigation = useNavigation<any>();
 
   // Derive summary info from stations
   const stations = journeyData?.stations || [];
@@ -127,14 +128,32 @@ const TrackingResultsUI = ({ onBack, journeyData, isLoading, isError }: { onBack
     );
   }
 
-  if (isError || !journeyData || stations.length === 0) {
+  // --- SCHEDULED / Upcoming Journey (train hasn't departed yet) ---
+  if (!isError && journeyData && (journeyData.status === 'SCHEDULED' || stations.length === 0)) {
+    return (
+      <SafeAreaView style={[styles.safeArea, { alignItems: 'center', justifyContent: 'center', flex: 1, backgroundColor: COLORS.navy }]}>
+        <StatusBar barStyle="light-content" backgroundColor={COLORS.navy} />
+        <MaterialCommunityIcons name="clock-outline" size={64} color={COLORS.emerald} style={{ marginBottom: 16 }} />
+        <Text style={{ color: COLORS.white, fontSize: 20, fontWeight: '900', marginBottom: 8, letterSpacing: 0.5 }}>Journey Not Started</Text>
+        <Text style={{ color: COLORS.slateBorder, fontSize: 14, marginBottom: 32, textAlign: 'center', paddingHorizontal: 40, lineHeight: 20 }}>
+          {journeyData?.trainName ? `${journeyData.trainName} has not departed yet.` : "This train has not departed yet."}
+        </Text>
+        <TouchableOpacity onPress={onBack} style={{ paddingHorizontal: 24, paddingVertical: 12, backgroundColor: COLORS.white, borderRadius: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 6, elevation: 4 }}>
+          <Text style={{ color: COLORS.navy, fontWeight: '900', letterSpacing: 1 }}>GO BACK</Text>
+        </TouchableOpacity>
+      </SafeAreaView>
+    );
+  }
+
+  // --- Actual Error State ---
+  if (isError || !journeyData) {
     return (
       <View style={[styles.trackingOuter, { justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 }]}>
         <SafeAreaView style={{ flex: 0, backgroundColor: COLORS.navy }} />
         <StatusBar barStyle="light-content" backgroundColor={COLORS.navy} />
         <MaterialCommunityIcons name="train-car" size={56} color={COLORS.slateBorder} />
         <Text style={{ marginTop: 16, fontSize: 16, fontWeight: '800', color: COLORS.slateDark, textAlign: 'center' }}>Could not load live status</Text>
-        <Text style={{ marginTop: 8, fontSize: 13, fontWeight: '600', color: COLORS.slateMuted, textAlign: 'center' }}>Please verify the train number and try again.</Text>
+        <Text style={{ marginTop: 8, fontSize: 13, fontWeight: '600', color: COLORS.slateMuted, textAlign: 'center' }}>{errorMessage || 'Please verify the train number and try again.'}</Text>
         <TouchableOpacity onPress={onBack} style={{ marginTop: 24, backgroundColor: COLORS.navy, paddingHorizontal: 28, paddingVertical: 12, borderRadius: 8 }}>
           <Text style={{ color: COLORS.white, fontWeight: '800', fontSize: 13 }}>GO BACK</Text>
         </TouchableOpacity>
@@ -186,22 +205,49 @@ const TrackingResultsUI = ({ onBack, journeyData, isLoading, isError }: { onBack
             const isDest = station.status === 'destination';
 
             const arrDisplay = station.actArrival || station.schArrival || station.time || '--:--';
-            const depDisplay = station.actArrival || '--:--'; // Could be refined if API provides departure
+            const depDisplay = station.actDeparture !== '--:--' ? station.actDeparture : station.schDeparture;
+
+            // Dynamic segment height based on physical distance
+            let segmentHeight = MIN_HEIGHT;
+            if (!isLast) {
+              const nextStation = stations[index + 1];
+              const physicalDist = (nextStation.distance || 0) - (station.distance || 0);
+              segmentHeight = normalize(physicalDist, MIN_HEIGHT, MAX_HEIGHT);
+            }
             
             return (
-              <View key={`${station.code}-${index}`} style={styles.timelineSegmentRow}>
+              <View key={`${station.code}-${index}`} style={[styles.timelineSegmentRow, { height: isLast ? MIN_HEIGHT : segmentHeight }]}>
                 {/* 1. Left Col: Station Details */}
                 <View style={styles.timelineLeftCol}>
                    <Text style={[styles.timelineStationName, isCurrent && { color: COLORS.navy, fontWeight: '900' }]}>{station.name}</Text>
                    <Text style={styles.timelineDistance}>{station.distance} km</Text>
-                   <View style={styles.timelineAmenitiesRow}>
-                     <View style={styles.timelineIconOutline}>
-                        <MaterialCommunityIcons name="bed-outline" size={16} color={COLORS.navy} />
+                   {station.lat && station.lng ? (
+                     <View style={styles.amenityButtonsRow}>
+                       <TouchableOpacity
+                         style={[styles.amenityButton, { backgroundColor: 'rgba(229, 57, 53, 0.1)' }]}
+                         onPress={() => navigation.navigate('AmenitiesList', { type: 'hospital', stationLat: station.lat, stationLng: station.lng, stationName: station.name })}
+                       >
+                         <MaterialCommunityIcons name="hospital-marker" size={14} color="#E53935" />
+                         <Text style={[styles.amenityButtonText, { color: '#E53935' }]}>Hospitals</Text>
+                       </TouchableOpacity>
+                       <TouchableOpacity
+                         style={[styles.amenityButton, { backgroundColor: 'rgba(21, 101, 192, 0.1)' }]}
+                         onPress={() => navigation.navigate('AmenitiesList', { type: 'hotel', stationLat: station.lat, stationLng: station.lng, stationName: station.name })}
+                       >
+                         <MaterialCommunityIcons name="bed" size={14} color="#1565C0" />
+                         <Text style={[styles.amenityButtonText, { color: '#1565C0' }]}>Hotels</Text>
+                       </TouchableOpacity>
                      </View>
-                     <View style={[styles.timelineIconOutline, { marginLeft: 8 }]}>
-                        <MaterialCommunityIcons name="hospital-box-outline" size={16} color={COLORS.navy} />
+                   ) : (
+                     <View style={styles.timelineAmenitiesRow}>
+                       <View style={styles.timelineIconOutline}>
+                          <MaterialCommunityIcons name="bed-outline" size={16} color={COLORS.navy} />
+                       </View>
+                       <View style={[styles.timelineIconOutline, { marginLeft: 8 }]}>
+                          <MaterialCommunityIcons name="hospital-box-outline" size={16} color={COLORS.navy} />
+                       </View>
                      </View>
-                   </View>
+                   )}
                    {isDest && (
                      <Text style={styles.timelineDestLabel}>DESTINATION</Text>
                    )}
@@ -238,8 +284,7 @@ const TrackingResultsUI = ({ onBack, journeyData, isLoading, isError }: { onBack
                      <Text style={[styles.timeValText, (isCurrent || isUpcoming) && arrDisplay !== '--:--' && { color: COLORS.red }]}>{arrDisplay}</Text>
                    </View>
                    <View style={styles.timeLabelContainer}>
-                     <Text style={styles.timeLabelText}>PF</Text>
-                     <Text style={styles.timeValText}>{station.platform || 'TBA'}</Text>
+                     <Text style={styles.platformText}>DEP: {depDisplay || '--:--'} • PF {station.platform || 'TBA'}</Text>
                    </View>
                 </View>
               </View>
@@ -251,10 +296,46 @@ const TrackingResultsUI = ({ onBack, journeyData, isLoading, isError }: { onBack
   );
 };
 
+interface RecentSearch {
+  query: string;
+  trainName?: string;
+  startDayOffset: number;
+  timestamp: number;
+}
+
 // --- SEARCH UI COMPONENT ---
-const SearchStateUI = ({ onBack, onSearch, activePnr, onViewActiveJourney }: { onBack: () => void, onSearch: (query: string, startDayOffset: number) => void, activePnr: string | null, onViewActiveJourney: () => void }) => {
+const SearchStateUI = ({ onBack, onSearch, activePnr, pnrData, onViewActiveJourney }: { onBack: () => void, onSearch: (query: string, startDayOffset: number) => void, activePnr: string | null, pnrData?: any, onViewActiveJourney: () => void }) => {
   const [trainQuery, setTrainQuery] = useState('');
   const [startDayOffset, setStartDayOffset] = useState<number>(0);
+  const [recentSearches, setRecentSearches] = useState<RecentSearch[]>([]);
+
+  useEffect(() => {
+    const loadRecentSearches = async () => {
+      try {
+        const stored = await AsyncStorage.getItem('@live_train_recent');
+        if (stored) setRecentSearches(JSON.parse(stored));
+      } catch (e) { console.error(e); }
+    };
+    loadRecentSearches();
+  }, []);
+
+  const handleSearchSubmit = async () => {
+    if (!trainQuery.trim()) return;
+
+    const newSearch: RecentSearch = { query: trainQuery, startDayOffset, timestamp: Date.now() };
+    const filtered = recentSearches.filter(item => item.query !== trainQuery);
+    const updated = [newSearch, ...filtered].slice(0, 5); // Keep top 5
+
+    setRecentSearches(updated);
+    await AsyncStorage.setItem('@live_train_recent', JSON.stringify(updated));
+
+    onSearch(trainQuery, startDayOffset);
+  };
+
+  const clearHistory = async () => {
+    setRecentSearches([]);
+    await AsyncStorage.removeItem('@live_train_recent');
+  };
 
   const dateOptions = [
     { label: 'Today', value: 0 },
@@ -305,22 +386,45 @@ const SearchStateUI = ({ onBack, onSearch, activePnr, onViewActiveJourney }: { o
                })}
              </View>
 
-             <TouchableOpacity style={styles.searchSubmitBtn} onPress={() => onSearch(trainQuery, startDayOffset)}>
+             <TouchableOpacity style={styles.searchSubmitBtn} onPress={handleSearchSubmit}>
                <Text style={styles.searchSubmitBtnText}>CHECK STATUS</Text>
                <Feather name="arrow-right" size={16} color={COLORS.white} style={{ marginLeft: 8 }} />
              </TouchableOpacity>
            </View>
            
            {activePnr && (
-             <View style={styles.activeJourneyCard}>
-               <View style={styles.activeJourneyLeft}>
-                 <MaterialCommunityIcons name="ticket-confirmation-outline" size={24} color={COLORS.emerald} />
-                 <View style={styles.activeJourneyTextCol}>
-                   <Text style={styles.activeJourneyTitle}>Active Ticket Detected</Text>
-                   <Text style={styles.activeJourneySub}>PNR: {activePnr}</Text>
-                 </View>
+             <View style={[styles.activeJourneyCard, { flexDirection: 'column', alignItems: 'stretch' }]}>
+               <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                 <MaterialCommunityIcons name="ticket-confirmation-outline" size={18} color={COLORS.emerald} />
+                 <Text style={{ fontSize: 14, fontWeight: '800', color: '#064E3B', marginLeft: 8 }}>
+                   ACTIVE TICKET DETECTED
+                 </Text>
                </View>
-               <TouchableOpacity style={styles.activeJourneyBtn} onPress={onViewActiveJourney}>
+               
+               <Text style={{ fontSize: 12, fontWeight: '700', color: '#047857', marginBottom: 4 }}>
+                 PNR: {activePnr}
+               </Text>
+
+               {pnrData?.trainName ? (
+                 <Text style={{ fontSize: 16, fontWeight: '900', color: COLORS.navy, marginBottom: 16, marginTop: 4 }}>
+                   {pnrData.trainNumber} - {pnrData.trainName}
+                 </Text>
+               ) : (
+                 <Text style={{ fontSize: 13, fontWeight: '700', color: '#047857', opacity: 0.8, marginBottom: 16, marginTop: 4 }}>
+                   Fetching journey details...
+                 </Text>
+               )}
+
+               <TouchableOpacity 
+                 style={[styles.activeJourneyBtn, { alignSelf: 'flex-start' }]}
+                 onPress={() => {
+                   if (pnrData?.trainNumber) {
+                     onSearch(pnrData.trainNumber.toString(), 0); 
+                   } else {
+                     onViewActiveJourney();
+                   }
+                 }}
+               >
                  <Text style={styles.activeJourneyBtnText}>TRACK LIVE</Text>
                  <Feather name="arrow-right" size={14} color={COLORS.emerald} style={{ marginLeft: 4 }} />
                </TouchableOpacity>
@@ -332,19 +436,32 @@ const SearchStateUI = ({ onBack, onSearch, activePnr, onViewActiveJourney }: { o
                <View style={styles.searchRecentIndicator} />
                <Text style={styles.searchRecentTitle}>RECENT SEARCHES</Text>
              </View>
+             {recentSearches.length > 0 && (
+               <TouchableOpacity onPress={clearHistory}>
+                 <Text style={{ fontSize: 10, fontWeight: '800', color: COLORS.red, letterSpacing: 0.5 }}>CLEAR</Text>
+               </TouchableOpacity>
+             )}
            </View>
            
-           <TouchableOpacity style={styles.searchRecentItem}>
-             <Feather name="clock" size={18} color="#454652" />
-             <Text style={styles.searchRecentItemText}>12034 SHATABDI EXP</Text>
-             <Feather name="chevron-right" size={18} color="#454652" style={{ marginLeft: 'auto' }} />
-           </TouchableOpacity>
-           
-           <TouchableOpacity style={[styles.searchRecentItem, { backgroundColor: '#F8F9FA' }]}>
-             <Feather name="clock" size={18} color="#454652" />
-             <Text style={styles.searchRecentItemText}>12951 RAJDHANI EXP</Text>
-             <Feather name="chevron-right" size={18} color="#454652" style={{ marginLeft: 'auto' }} />
-           </TouchableOpacity>
+           {recentSearches.map((item, index) => {
+             const dayString = item.startDayOffset === 0 ? "Today" : item.startDayOffset === 1 ? "Yesterday" : "2 Days Ago";
+             return (
+               <TouchableOpacity 
+                 key={index} 
+                 style={[styles.searchRecentItem, index % 2 !== 0 && { backgroundColor: '#F8F9FA' }]}
+                 onPress={() => onSearch(item.query, item.startDayOffset)}
+               >
+                 <Feather name="clock" size={18} color="#454652" />
+                 <Text style={[styles.searchRecentItemText, { flex: 1 }]} numberOfLines={1}>
+                   {item.query}{item.trainName ? ` ${item.trainName.toUpperCase()}` : ''}
+                 </Text>
+                 <View style={{ backgroundColor: '#E2E8F0', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, marginRight: 12 }}>
+                   <Text style={{ fontSize: 9, color: '#475569', fontWeight: '800', letterSpacing: 0.5 }}>{dayString.toUpperCase()}</Text>
+                 </View>
+                 <Feather name="chevron-right" size={18} color="#454652" />
+               </TouchableOpacity>
+             );
+           })}
         </View>
       </View>
     </View>
@@ -399,7 +516,7 @@ export default function LiveStatusScreen() {
   };
 
   // Live Train Status query (fires when user searches)
-  const { data: liveTrainData, isLoading: isLiveLoading, isError: isLiveError } = useQuery({
+  const { data: liveTrainData, isLoading: isLiveLoading, isError: isLiveError, error: liveError } = useQuery({
     queryKey: ['liveTrainStatus', selectedTrainNo, selectedStartDay],
     queryFn: () => fetchLiveTrainStatus(selectedTrainNo, selectedStartDay),
     enabled: isTracking && !!selectedTrainNo && selectedTrainNo.length >= 4,
@@ -409,6 +526,25 @@ export default function LiveStatusScreen() {
     retry: 1,
     retryDelay: 1000,
   });
+
+  // Enrich recent search with train name once fetched
+  useEffect(() => {
+    if (isTracking && liveTrainData?.trainName && selectedTrainNo) {
+      const enrichSearchHistory = async () => {
+        try {
+          const stored = await AsyncStorage.getItem('@live_train_recent');
+          if (!stored) return;
+          let recent = JSON.parse(stored);
+          const index = recent.findIndex((r: any) => r.query === selectedTrainNo);
+          if (index !== -1 && recent[index].trainName !== liveTrainData.trainName) {
+            recent[index].trainName = liveTrainData.trainName;
+            await AsyncStorage.setItem('@live_train_recent', JSON.stringify(recent));
+          }
+        } catch (e) { console.error(e); }
+      };
+      enrichSearchHistory();
+    }
+  }, [liveTrainData?.trainName, isTracking, selectedTrainNo]);
 
   useEffect(() => {
     if (!activePnr) {
@@ -448,7 +584,87 @@ export default function LiveStatusScreen() {
   
   // Hybrid Tracking State
   const [isBoarded, setIsBoarded] = useState(false);
+  const [showLocationMismatchModal, setShowLocationMismatchModal] = useState(false);
   const pulseAnim = useRef(new Animated.Value(1)).current;
+  const [isGpsPanelOpen, setIsGpsPanelOpen] = useState(false);
+  const slideAnim = useRef(new Animated.Value(300)).current;
+
+  const BOARDING_THRESHOLD_KM = 50; // Increased to cover large gaps between stations
+
+  const handleBoardingToggle = async (value: boolean) => {
+    if (!value) {
+      setIsBoarded(false);
+      await AsyncStorage.setItem('proximity_alerts_enabled', 'false');
+      return;
+    }
+
+    if (!liveTrainData || !liveTrainData.stations || liveTrainData.stations.length === 0) {
+      setShowLocationMismatchModal(true);
+      return;
+    }
+
+    try {
+      // 1. Check permissions first
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        alert('Permission to access location was denied');
+        return;
+      }
+
+      // 2. Actively fetch the fresh LIVE location
+      const liveLocation = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+
+      const userLat = liveLocation.coords.latitude;
+      const userLng = liveLocation.coords.longitude;
+
+      // 3. Compare live location against the route
+      let isUserOnRoute = false;
+      for (const station of liveTrainData.stations) {
+        if (station.lat && station.lng) {
+          const dist = getDistance(
+            { lat: userLat, lng: userLng },
+            { lat: station.lat, lng: station.lng }
+          );
+          if (dist <= BOARDING_THRESHOLD_KM) {
+            isUserOnRoute = true;
+            break;
+          }
+        }
+      }
+
+      // 4. Resolve the toggle
+      if (isUserOnRoute) {
+        setIsBoarded(true);
+        await AsyncStorage.setItem('proximity_alerts_enabled', 'true');
+      } else {
+        setIsBoarded(false); // Force it off
+        await AsyncStorage.setItem('proximity_alerts_enabled', 'false');
+        setShowLocationMismatchModal(true); // Show the error popup
+      }
+    } catch (error) {
+      console.error("Error fetching live location:", error);
+      setShowLocationMismatchModal(true);
+    }
+  };
+
+  // Drive the slide animation based on panel state
+  useEffect(() => {
+    Animated.spring(slideAnim, {
+      toValue: isGpsPanelOpen ? 0 : 300, // 0 = visible, 300 = completely off-screen below
+      friction: 8,
+      tension: 50,
+      useNativeDriver: true,
+    }).start();
+  }, [isGpsPanelOpen]);
+
+  // Ensure panel is hidden whenever tracking stops
+  useEffect(() => {
+    if (!isTracking) {
+      setIsGpsPanelOpen(false);
+    }
+  }, [isTracking]);
   
   useEffect(() => {
     Animated.loop(
@@ -462,8 +678,9 @@ export default function LiveStatusScreen() {
   // Handle hybrid mode persistence
   useEffect(() => {
     const loadBoardedState = async () => {
-      const val = await AsyncStorage.getItem('proximity_alerts_enabled');
-      if (val) setIsBoarded(val === 'true');
+      // The user requested to wipe the stale cache forcing it ON.
+      await AsyncStorage.removeItem('proximity_alerts_enabled');
+      setIsBoarded(false);
     };
     loadBoardedState();
   }, []);
@@ -814,8 +1031,72 @@ export default function LiveStatusScreen() {
 
   // --- RENDERS ---
   if (isInitializing) return <SafeAreaView style={styles.safeArea} />; // Blank while checking storage
-  if (!isTracking) return <SearchStateUI activePnr={activePnr} onBack={() => navigation.goBack()} onSearch={(query, date) => handleInitiateSearch(query, date)} onViewActiveJourney={() => setIsTracking(true)} />;
-  if (isTracking) return <TrackingResultsUI onBack={() => { setIsTracking(false); setSelectedTrainNo(''); }} journeyData={liveTrainData} isLoading={isLiveLoading} isError={isLiveError} />;
+  if (!isTracking) return <SearchStateUI activePnr={activePnr} pnrData={journey} onBack={() => navigation.goBack()} onSearch={(query, date) => handleInitiateSearch(query, date)} onViewActiveJourney={() => setIsTracking(true)} />;
+  if (isTracking) return (
+    <View style={{ flex: 1 }}>
+      <TrackingResultsUI onBack={() => { setIsTracking(false); setSelectedTrainNo(''); }} journeyData={liveTrainData} isLoading={isLiveLoading} isError={isLiveError} errorMessage={(liveError as any)?.message} />
+      {isTracking && !isGpsPanelOpen && (
+        <TouchableOpacity 
+          style={styles.collapsedGpsBtn} 
+          onPress={() => setIsGpsPanelOpen(true)}
+        >
+          <MaterialCommunityIcons name="crosshairs-gps" size={18} color="#FFFFFF" />
+          <MaterialCommunityIcons name="chevron-up" size={22} color="#FFFFFF" style={{ marginLeft: 4 }} />
+        </TouchableOpacity>
+      )}
+
+      {/* Floating GPS Panel */}
+      <Animated.View style={[styles.floatingPanel, { transform: [{ translateY: slideAnim }] }]}>
+        {/* The Close Chevron */}
+        <TouchableOpacity 
+          style={styles.panelCloseArea} 
+          onPress={() => setIsGpsPanelOpen(false)}
+        >
+          <View style={styles.panelDragHandle} />
+          <MaterialCommunityIcons name="chevron-down" size={24} color="#94A3B8" />
+        </TouchableOpacity>
+
+        {/* Existing Row */}
+        <View style={styles.floatingPanelRow}>
+          <View style={{ flex: 1, paddingRight: 16 }}>
+            <Text style={styles.floatingPanelTitle}>Inside the Train?</Text>
+            <Text style={styles.floatingPanelSub}>
+              {isBoarded ? "GPS Proximity Alerts Active" : "Enable GPS to track accurate location"}
+            </Text>
+          </View>
+          <Switch 
+            value={isBoarded} 
+            onValueChange={handleBoardingToggle} 
+            trackColor={{ false: '#CBD5E1', true: '#10B981' }}
+            thumbColor={'#FFFFFF'}
+          />
+        </View>
+      </Animated.View>
+
+      {/* Location Mismatch Modal */}
+      <Modal visible={showLocationMismatchModal} transparent animationType="fade">
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <View style={{ backgroundColor: '#FFFFFF', borderRadius: 20, padding: 24, width: '100%', maxWidth: 340, alignItems: 'center' }}>
+            <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: '#ECFDF5', justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+              <MaterialCommunityIcons name="map-marker-distance" size={32} color="#10B981" />
+            </View>
+            <Text style={{ fontSize: 20, fontWeight: '900', color: '#1A1F71', marginBottom: 8, textAlign: 'center' }}>
+              Not on Train
+            </Text>
+            <Text style={{ fontSize: 15, color: '#64748B', textAlign: 'center', lineHeight: 22, marginVertical: 12 }}>
+              Your current GPS location is more than 10km away from any station on this route. Please board the train to activate live alerts.
+            </Text>
+            <TouchableOpacity 
+              style={{ backgroundColor: '#1A1F71', paddingVertical: 14, width: '100%', borderRadius: 12, alignItems: 'center', marginTop: 12 }}
+              onPress={() => setShowLocationMismatchModal(false)}
+            >
+              <Text style={{ color: '#FFFFFF', fontWeight: '800', fontSize: 16 }}>I Understand</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
 
   if (isError) {
     return <EmptyState text="Could not fetch journey details. Please check your network or enter a valid PNR." onBack={() => navigation.goBack()} />;
@@ -1663,7 +1944,7 @@ const styles = StyleSheet.create({
   journeyProgressTitle: { textAlign: 'center', fontSize: 11, fontWeight: '800', color: '#44474E', letterSpacing: 1 },
   journeyProgressUnderline: { width: 120, height: 1, backgroundColor: '#E2E8F0', alignSelf: 'center', marginTop: 8, marginBottom: 32 },
 
-  timelineSegmentRow: { flexDirection: 'row', minHeight: 110 },
+  timelineSegmentRow: { flexDirection: 'row', minHeight: MIN_HEIGHT },
   timelineLeftCol: { flex: 1, paddingTop: 4 },
   timelineStationName: { fontSize: 14, fontWeight: '800', color: '#1A1C1C', marginBottom: 4 },
   timelineDistance: { fontSize: 13, fontWeight: '600', color: '#64748B', marginBottom: 12 },
@@ -1673,7 +1954,7 @@ const styles = StyleSheet.create({
 
   timelineCenterCol: { width: 60, position: 'relative', alignItems: 'center' },
   timelineLineTop: { position: 'absolute', top: 0, height: 14, width: 12, borderRadius: 0 },
-  timelineLineBottom: { position: 'absolute', top: 14, bottom: 0, width: 12, borderRadius: 0 },
+  timelineLineBottom: { position: 'absolute', top: 14, bottom: 0, width: 12, borderRadius: 0, height: '100%' },
   nodeAbsoluteContainer: { position: 'absolute', top: 4, width: 20, height: 20, justifyContent: 'center', alignItems: 'center' },
   nodeSolidCircle: { width: 12, height: 12, borderRadius: 6, justifyContent: 'center', alignItems: 'center' },
   nodeOuterLayer: { width: 30, height: 30, borderRadius: 15, backgroundColor: COLORS.white, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: COLORS.navy },
@@ -1682,5 +1963,65 @@ const styles = StyleSheet.create({
   timelineRightCol: { width: 110, alignItems: 'flex-end', paddingTop: 6 },
   timeLabelContainer: { flexDirection: 'row', alignItems: 'center', marginBottom: 8, justifyContent: 'space-between', width: '100%' },
   timeLabelText: { fontSize: 11, fontWeight: '800', color: '#44474E' },
-  timeValText: { fontSize: 14, fontWeight: '800', color: '#1A1C1C', textAlign: 'right' }
+  timeValText: { fontSize: 14, fontWeight: '800', color: '#1A1C1C', textAlign: 'right' },
+  floatingPanel: {
+    position: 'absolute',
+    bottom: 24, 
+    left: 16,
+    right: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
+    borderWidth: 1,
+    borderColor: '#F1F5F9'
+  },
+  floatingPanelRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  floatingPanelTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#1E293B',
+    marginBottom: 4,
+  },
+  floatingPanelSub: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  collapsedGpsBtn: {
+    position: 'absolute',
+    bottom: 24,
+    right: 16,
+    backgroundColor: '#1E293B',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 30,
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+  },
+  panelCloseArea: {
+    alignItems: 'center',
+    paddingBottom: 8,
+    marginTop: -8,
+  },
+  panelDragHandle: {
+    width: 36,
+    height: 4,
+    backgroundColor: '#E2E8F0',
+    borderRadius: 2,
+    marginBottom: 4,
+  }
 });

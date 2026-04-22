@@ -14,6 +14,8 @@ export interface JourneyStation {
   platform?: string;
   schArrival?: string;
   actArrival?: string;
+  schDeparture?: string;
+  actDeparture?: string;
   status?: 'passed' | 'current' | 'upcoming' | 'destination';
 }
 
@@ -98,6 +100,8 @@ export interface LiveTrainData {
   trainName: string;
   currentStationCode: string;
   stations: JourneyStation[];
+  status?: string;
+  trainNumber?: string;
 }
 
 /**
@@ -108,13 +112,46 @@ export interface LiveTrainData {
  * @param startDay – Journey start day offset (0 = today, 1 = yesterday, 2 = 2 days ago)
  */
 export const fetchLiveTrainStatus = async (trainNo: string, startDay: number = 0): Promise<LiveTrainData> => {
-  const response = await apiClient.get(`trains/live/${trainNo}`, {
-    params: { startDay },
-  });
+  try {
+    const response = await apiClient.get(`/trains/live/${trainNo}?startDay=${startDay}`);
+    
+    // Log what the frontend actually sees to the Metro console
+    console.log("🚂 FRONTEND RAW JSON:", JSON.stringify(response.data).substring(0, 200));
 
-  if (!response.data?.success) {
-    throw new Error(response.data?.error || 'Failed to fetch live train status');
+    const payload = response.data;
+    
+    if (payload.success === false) {
+      throw new Error(payload.error || payload.message || "API reported failure");
+    }
+
+    // Aggressive Unwrapping — handle all possible nesting depths
+    let trainData = null;
+    const innerData = payload.data?.data || payload.data || payload;
+
+    // Check if the array exists under 'stations' or 'timeline'
+    if (innerData.stations && Array.isArray(innerData.stations) && innerData.stations.length > 0) {
+      trainData = innerData;
+    } else if (innerData.timeline && Array.isArray(innerData.timeline) && innerData.timeline.length > 0) {
+      innerData.stations = innerData.timeline; // Normalize to stations
+      trainData = innerData;
+    } else if (innerData.status === 'SCHEDULED' || innerData.trainName || innerData.trainNumber) {
+      // It's a valid payload, but the train truly hasn't started (empty route)
+      trainData = innerData;
+    }
+
+    if (!trainData) {
+      throw new Error('Data malformed: Unrecognized payload structure.');
+    }
+
+    if (!trainData.stations) {
+      trainData.stations = [];
+    }
+
+    console.log(`✅ UNWRAPPED: trainName=${trainData.trainName}, stations=${trainData.stations.length}`);
+
+    return trainData;
+  } catch (error: any) {
+    console.error("❌ FETCH LIVE TRAIN ERROR:", error.message || error);
+    throw error;
   }
-
-  return response.data.data;
 };
