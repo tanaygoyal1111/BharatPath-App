@@ -116,9 +116,7 @@ export const fetchLiveTrainStatus = async (trainNo: string, startDay: number = 0
   try {
     const response = await apiClient.get(`/trains/live/${trainNo}?startDay=${startDay}`);
     
-    // Log what the frontend actually sees to the Metro console
-    console.log("🚂 FRONTEND RAW JSON:", JSON.stringify(response.data).substring(0, 200));
-
+    
     const payload = response.data;
     
     if (payload.success === false) {
@@ -148,11 +146,10 @@ export const fetchLiveTrainStatus = async (trainNo: string, startDay: number = 0
       trainData.stations = [];
     }
 
-    console.log(`✅ UNWRAPPED: trainName=${trainData.trainName}, stations=${trainData.stations.length}`);
 
     return trainData;
   } catch (error: any) {
-    console.error("❌ FETCH LIVE TRAIN ERROR:", error.message || error);
+    if (__DEV__) console.error("❌ FETCH LIVE TRAIN ERROR:", error.message || error);
     throw error;
   }
 };

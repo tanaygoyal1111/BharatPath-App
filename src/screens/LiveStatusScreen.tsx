@@ -373,7 +373,7 @@ const SearchStateUI = ({ onBack, onSearch, activePnr, pnrData, onViewActiveJourn
       try {
         const stored = await AsyncStorage.getItem('@live_train_recent');
         if (stored) setRecentSearches(JSON.parse(stored));
-      } catch (e) { console.error(e); }
+      } catch (e) { if (__DEV__) console.error(e); }
     };
     loadRecentSearches();
   }, []);
@@ -598,7 +598,7 @@ export default function LiveStatusScreen() {
             recent[index].trainName = liveTrainData.trainName;
             await AsyncStorage.setItem('@live_train_recent', JSON.stringify(recent));
           }
-        } catch (e) { console.error(e); }
+        } catch (e) { if (__DEV__) console.error(e); }
       };
       enrichSearchHistory();
     }
@@ -705,7 +705,7 @@ export default function LiveStatusScreen() {
         setShowLocationMismatchModal(true); // Show the error popup
       }
     } catch (error) {
-      console.error("Error fetching live location:", error);
+      if (__DEV__) console.error("Error fetching live location:", error);
       setShowLocationMismatchModal(true);
     }
   };

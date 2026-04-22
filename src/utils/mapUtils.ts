@@ -62,7 +62,6 @@ export const openInMaps = async (place: PlaceLocation) => {
     return Linking.openURL(appleMaps);
 
   } catch (error) {
-    console.log("openInMaps error:", error);
 
     // FINAL FALLBACK: Attempt browser-based maps if deep linking failed
     if (place?.lat && (place?.lon || (place as any).lng)) {
