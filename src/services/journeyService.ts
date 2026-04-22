@@ -102,6 +102,7 @@ export interface LiveTrainData {
   stations: JourneyStation[];
   status?: string;
   trainNumber?: string;
+  currentDistance?: number;
 }
 
 /**

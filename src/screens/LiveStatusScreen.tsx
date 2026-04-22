@@ -106,8 +106,9 @@ function getConfidence({ isMoving, isNearRoute, accuracy }: { isMoving: boolean;
 }
 
 // --- TRACKING RESULTS UI COMPONENT ---
-const TrackingResultsUI = ({ onBack, journeyData, isLoading, isError, errorMessage }: { onBack: () => void, journeyData: LiveTrainData | null | undefined, isLoading: boolean, isError: boolean, errorMessage?: string }) => {
+const TrackingResultsUI = ({ onBack, onRefresh, journeyData, isLoading, isError, errorMessage }: { onBack: () => void, onRefresh: () => void, journeyData: LiveTrainData | null | undefined, isLoading: boolean, isError: boolean, errorMessage?: string }) => {
   const navigation = useNavigation<any>();
+  const trainGlideAnim = useRef(new Animated.Value(0)).current;
 
   // Derive summary info from stations
   const stations = journeyData?.stations || [];
@@ -116,6 +117,18 @@ const TrackingResultsUI = ({ onBack, journeyData, isLoading, isError, errorMessa
   const nextUpcoming = stations.find(s => s.status === 'upcoming');
   const nextStopName = nextUpcoming?.name || currentStation?.name || '—';
   const nextStopArr = nextUpcoming?.schArrival || currentStation?.schArrival || '--:--';
+
+  let targetTrainOffset = 0;
+
+  useEffect(() => {
+    // If we calculated a targetTrainOffset, animate to it
+    Animated.spring(trainGlideAnim, {
+      toValue: targetTrainOffset,
+      friction: 6,
+      tension: 40,
+      useNativeDriver: true,
+    }).start();
+  }, [journeyData?.currentDistance, targetTrainOffset, trainGlideAnim]); // Triggers when API refreshes
 
   if (isLoading) {
     return (
@@ -214,6 +227,22 @@ const TrackingResultsUI = ({ onBack, journeyData, isLoading, isError, errorMessa
               const physicalDist = (nextStation.distance || 0) - (station.distance || 0);
               segmentHeight = normalize(physicalDist, MIN_HEIGHT, MAX_HEIGHT);
             }
+
+            if (station.status === 'current' && !isLast) {
+              const nextStation = journeyData.stations[index + 1];
+              const totalSegmentDist = (nextStation.distance || 0) - (station.distance || 0);
+              
+              // How far the train has travelled PAST the current station
+              const trainProgressDist = (journeyData.currentDistance || station.distance || 0) - (station.distance || 0);
+
+              let progressRatio = 0;
+              if (totalSegmentDist > 0 && trainProgressDist > 0) {
+                progressRatio = Math.min(1, Math.max(0, trainProgressDist / totalSegmentDist));
+              }
+
+              // Calculate pixel drop based on the visual segment height
+              targetTrainOffset = progressRatio * segmentHeight;
+            }
             
             return (
               <View key={`${station.code}-${index}`} style={[styles.timelineSegmentRow, { height: isLast ? MIN_HEIGHT : segmentHeight }]}>
@@ -262,11 +291,23 @@ const TrackingResultsUI = ({ onBack, journeyData, isLoading, isError, errorMessa
                    {/* Node Circle */}
                    <View style={styles.nodeAbsoluteContainer}>
                      {isCurrent ? (
-                       <View style={styles.nodeOuterLayer}>
-                          <View style={styles.nodeInnerCircle}>
-                             <MaterialCommunityIcons name="train" size={16} color={COLORS.navy} />
-                          </View>
-                       </View>
+                       <Animated.View 
+                         style={[
+                           { 
+                             position: 'absolute', 
+                             zIndex: 20, 
+                             alignSelf: 'center',
+                             // Glide it down the track!
+                             transform: [{ translateY: trainGlideAnim }] 
+                           }
+                         ]}
+                       >
+                         <View style={styles.nodeOuterLayer}>
+                            <View style={styles.nodeInnerCircle}>
+                               <MaterialCommunityIcons name="train" size={16} color={COLORS.navy} />
+                            </View>
+                         </View>
+                       </Animated.View>
                      ) : isDest ? (
                        <View style={[styles.nodeSolidCircle, { backgroundColor: COLORS.navy, width: 16, height: 16, borderRadius: 8 }]}>
                          <MaterialCommunityIcons name="flag-variant" size={10} color={COLORS.white} />
@@ -292,6 +333,13 @@ const TrackingResultsUI = ({ onBack, journeyData, isLoading, isError, errorMessa
           })}
         </ScrollView>
       </View>
+
+      <TouchableOpacity 
+        style={styles.refreshFab} 
+        onPress={onRefresh} // Call the TanStack Query refetch
+      >
+        <MaterialCommunityIcons name="sync" size={24} color="#FFFFFF" />
+      </TouchableOpacity>
     </View>
   );
 };
@@ -516,7 +564,7 @@ export default function LiveStatusScreen() {
   };
 
   // Live Train Status query (fires when user searches)
-  const { data: liveTrainData, isLoading: isLiveLoading, isError: isLiveError, error: liveError } = useQuery({
+  const { data: liveTrainData, isLoading: isLiveLoading, isError: isLiveError, error: liveError, refetch: refetchLiveStatus } = useQuery({
     queryKey: ['liveTrainStatus', selectedTrainNo, selectedStartDay],
     queryFn: () => fetchLiveTrainStatus(selectedTrainNo, selectedStartDay),
     enabled: isTracking && !!selectedTrainNo && selectedTrainNo.length >= 4,
@@ -894,7 +942,21 @@ export default function LiveStatusScreen() {
       }
 
       const now = Date.now();
-      const timeToDest = journey?.endTime ? (journey.endTime - now) : 0;
+      
+      // Replace the existing timeToDest logic with this:
+      const trackingStations = liveTrainData?.stations || journey?.stations;
+      let timeToDest = 0;
+      
+      if (trackingStations && trackingStations.length > 0) {
+        const destStation = trackingStations[trackingStations.length - 1];
+        if (journey?.endTime) {
+          timeToDest = journey.endTime - Date.now();
+        } else if (destStation.schArrival) {
+          // Fallback: estimate based on scheduled arrival string (HH:MM)
+          // Note: This is a rough estimation for polling optimization
+          timeToDest = 60 * 60 * 1000; // Default 1 hour if we can't parse easily
+        }
+      }
 
       let dynamicTimeInterval = 5000; 
       let dynamicDistanceInterval = 200;
@@ -922,11 +984,12 @@ export default function LiveStatusScreen() {
     return () => {
       sub?.remove();
     };
-  }, [jState, journey]);
+  }, [jState, journey, liveTrainData]);
 
   const handleLocationUpdate = useCallback(
     async (location: Location.LocationObject) => {
-      if (!journey || !journey.stations || journey.stations.length === 0) return;
+      const trackingStations = liveTrainData?.stations || journey?.stations;
+      if (!trackingStations || trackingStations.length === 0) return;
 
       const now = Date.now();
       // Throttling: Return early if < 3s since last handled update
@@ -947,7 +1010,7 @@ export default function LiveStatusScreen() {
         lng: location.coords.longitude,
       });
 
-      const stations = journey.stations;
+      const stations = trackingStations;
       let minRouteDist = Infinity;
       let nearestIdx = 0;
 
@@ -1022,7 +1085,7 @@ export default function LiveStatusScreen() {
         };
       });
     },
-    [journey, smoothLocation]
+    [journey, liveTrainData, smoothLocation]
   );
 
   // 5. Auto Scroll removed for manual control via FAB
@@ -1034,7 +1097,7 @@ export default function LiveStatusScreen() {
   if (!isTracking) return <SearchStateUI activePnr={activePnr} pnrData={journey} onBack={() => navigation.goBack()} onSearch={(query, date) => handleInitiateSearch(query, date)} onViewActiveJourney={() => setIsTracking(true)} />;
   if (isTracking) return (
     <View style={{ flex: 1 }}>
-      <TrackingResultsUI onBack={() => { setIsTracking(false); setSelectedTrainNo(''); }} journeyData={liveTrainData} isLoading={isLiveLoading} isError={isLiveError} errorMessage={(liveError as any)?.message} />
+      <TrackingResultsUI onBack={() => { setIsTracking(false); setSelectedTrainNo(''); }} onRefresh={refetchLiveStatus} journeyData={liveTrainData} isLoading={isLiveLoading} isError={isLiveError} errorMessage={(liveError as any)?.message} />
       {isTracking && !isGpsPanelOpen && (
         <TouchableOpacity 
           style={styles.collapsedGpsBtn} 
@@ -1995,6 +2058,19 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: '#64748B',
+  },
+  refreshFab: {
+    position: 'absolute',
+    bottom: 90, // Moved up to prevent overlap with GPS button
+    right: 16,
+    backgroundColor: '#1E293B',
+    borderRadius: 30,
+    padding: 12,
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8
   },
   collapsedGpsBtn: {
     position: 'absolute',
