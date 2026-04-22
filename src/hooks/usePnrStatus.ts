@@ -39,6 +39,7 @@ export interface JourneyData {
   statusTag?: string;
   subText?: string;
   currentLocation?: string;
+  currentStationCode?: string;
   eta?: string;
   progressPct?: number;
   stations?: JourneyStation[];
