@@ -106,7 +106,14 @@ function getConfidence({ isMoving, isNearRoute, accuracy }: { isMoving: boolean;
 }
 
 // --- TRACKING RESULTS UI COMPONENT ---
-const TrackingResultsUI = ({ onBack, onRefresh, journeyData, isLoading, isError, errorMessage }: { onBack: () => void, onRefresh: () => void, journeyData: LiveTrainData | null | undefined, isLoading: boolean, isError: boolean, errorMessage?: string }) => {
+const TrackingResultsUI = ({ 
+  onBack, onRefresh, journeyData, isLoading, isError, errorMessage, 
+  activeGpsProgress, isBoarded 
+}: { 
+  onBack: () => void, onRefresh: () => void, journeyData: any, isLoading: boolean, isError: boolean, errorMessage?: string,
+  activeGpsProgress?: { currentIndex: number; distFromPrev: number; distToNext: number } | null,
+  isBoarded?: boolean
+}) => {
   const navigation = useNavigation<any>();
   const trainGlideAnim = useRef(new Animated.Value(0)).current;
 
@@ -118,17 +125,44 @@ const TrackingResultsUI = ({ onBack, onRefresh, journeyData, isLoading, isError,
   const nextStopName = nextUpcoming?.name || currentStation?.name || '—';
   const nextStopArr = nextUpcoming?.schArrival || currentStation?.schArrival || '--:--';
 
-  let targetTrainOffset = 0;
+  let calculatedTrainOffset = 0;
+
+  stations.forEach((station: any, index: number) => {
+    const isLast = index === stations.length - 1;
+    const isGpsActiveNode = isBoarded && activeGpsProgress && index === activeGpsProgress.currentIndex;
+    const isApiActiveNode = !isBoarded && station.status === 'current';
+
+    if ((isGpsActiveNode || isApiActiveNode) && !isLast) {
+      const nextStation = stations[index + 1];
+      const physicalDist = (nextStation.distance || 0) - (station.distance || 0);
+      const segmentHeight = normalize(physicalDist, MIN_HEIGHT, MAX_HEIGHT);
+
+      if (isGpsActiveNode) {
+        const dPrev = activeGpsProgress.distFromPrev || 0;
+        const dNext = activeGpsProgress.distToNext || 0; 
+        const denom = (dPrev + dNext);
+        const percentComplete = denom > 0 ? Math.max(0, Math.min(1, dPrev / denom)) : 0;
+        calculatedTrainOffset = (percentComplete * segmentHeight) || 0;
+      } else {
+        const totalSegmentDist = physicalDist;
+        const trainProgressDist = (journeyData?.currentDistance || station.distance || 0) - (station.distance || 0);
+        let progressRatio = 0;
+        if (totalSegmentDist > 0 && trainProgressDist > 0) {
+          progressRatio = Math.min(1, Math.max(0, trainProgressDist / totalSegmentDist));
+        }
+        calculatedTrainOffset = (progressRatio * segmentHeight) || 0;
+      }
+    }
+  });
 
   useEffect(() => {
-    // If we calculated a targetTrainOffset, animate to it
     Animated.spring(trainGlideAnim, {
-      toValue: targetTrainOffset,
+      toValue: calculatedTrainOffset || 0,
       friction: 6,
       tension: 40,
       useNativeDriver: true,
     }).start();
-  }, [journeyData?.currentDistance, targetTrainOffset, trainGlideAnim]); // Triggers when API refreshes
+  }, [journeyData?.currentDistance, activeGpsProgress, calculatedTrainOffset, trainGlideAnim]); 
 
   if (isLoading) {
     return (
@@ -228,21 +262,8 @@ const TrackingResultsUI = ({ onBack, onRefresh, journeyData, isLoading, isError,
               segmentHeight = normalize(physicalDist, MIN_HEIGHT, MAX_HEIGHT);
             }
 
-            if (station.status === 'current' && !isLast) {
-              const nextStation = journeyData.stations[index + 1];
-              const totalSegmentDist = (nextStation.distance || 0) - (station.distance || 0);
-              
-              // How far the train has travelled PAST the current station
-              const trainProgressDist = (journeyData.currentDistance || station.distance || 0) - (station.distance || 0);
-
-              let progressRatio = 0;
-              if (totalSegmentDist > 0 && trainProgressDist > 0) {
-                progressRatio = Math.min(1, Math.max(0, trainProgressDist / totalSegmentDist));
-              }
-
-              // Calculate pixel drop based on the visual segment height
-              targetTrainOffset = progressRatio * segmentHeight;
-            }
+            const isGpsActiveNode = isBoarded && activeGpsProgress && index === activeGpsProgress.currentIndex;
+            const isApiActiveNode = !isBoarded && station.status === 'current';
             
             return (
               <View key={`${station.code}-${index}`} style={[styles.timelineSegmentRow, { height: isLast ? MIN_HEIGHT : segmentHeight }]}>
@@ -290,14 +311,13 @@ const TrackingResultsUI = ({ onBack, onRefresh, journeyData, isLoading, isError,
                    
                    {/* Node Circle */}
                    <View style={styles.nodeAbsoluteContainer}>
-                     {isCurrent ? (
+                     {(isGpsActiveNode || isApiActiveNode) ? (
                        <Animated.View 
                          style={[
                            { 
                              position: 'absolute', 
                              zIndex: 20, 
                              alignSelf: 'center',
-                             // Glide it down the track!
                              transform: [{ translateY: trainGlideAnim }] 
                            }
                          ]}
@@ -626,7 +646,7 @@ export default function LiveStatusScreen() {
   const [journey, setJourney] = useState<JourneyAPIData | null>(null);
   const [isOffline, setIsOffline] = useState(false);
   const [jState, setJState] = useState<JourneyState>('LOADING');
-  const [progress, setProgress] = useState<{ currentIndex: number; distanceToNext: number } | null>(null);
+  const [progress, setProgress] = useState<{ currentIndex: number; distFromPrev: number; distToNext: number } | null>(null);
   const [confidence, setConfidence] = useState<Confidence>('LOW');
   const [layoutOffsets, setLayoutOffsets] = useState<{ [key: number]: number }>({});
   
@@ -1036,12 +1056,10 @@ export default function LiveStatusScreen() {
       const conf = getConfidence({ isMoving, isNearRoute, accuracy: locAcc });
       setConfidence(conf);
 
-      const distToNextNode = getDistance(
-        smoothedCoords,
-        stations[Math.min(nearestIdx + 1, stations.length - 1)]
-      );
+      const distFromPrevNode = getDistance(smoothedCoords, stations[nearestIdx]);
+      const distToNextNode = getDistance(smoothedCoords, stations[Math.min(nearestIdx + 1, stations.length - 1)]);
 
-      // --- SMART DISTANCE-BASED ALERTS ---
+      // --- PROXIMITY ALERT ENGINE ---
       if (isBoarded && isProximityEnabled && conf !== 'LOW') {
         const destNode = activeStations[activeStations.length - 1];
         const distToDest = getDistance(smoothedCoords, destNode);
@@ -1090,7 +1108,8 @@ export default function LiveStatusScreen() {
         }
         return {
           currentIndex: Math.max(nearestIdx, prev?.currentIndex || 0),
-          distanceToNext: Math.round(distToNextNode),
+          distFromPrev: distFromPrevNode,
+          distToNext: distToNextNode,
         };
       });
     },
@@ -1106,7 +1125,16 @@ export default function LiveStatusScreen() {
   if (!isTracking) return <SearchStateUI activePnr={activePnr} pnrData={journey} onBack={() => navigation.goBack()} onSearch={(query, date) => handleInitiateSearch(query, date)} onViewActiveJourney={() => setIsTracking(true)} />;
   if (isTracking) return (
     <View style={{ flex: 1 }}>
-      <TrackingResultsUI onBack={() => { setIsTracking(false); setSelectedTrainNo(''); }} onRefresh={refetchLiveStatus} journeyData={liveTrainData} isLoading={isLiveLoading} isError={isLiveError} errorMessage={(liveError as any)?.message} />
+      <TrackingResultsUI 
+        onBack={() => { setIsTracking(false); setSelectedTrainNo(''); }} 
+        onRefresh={refetchLiveStatus}
+        journeyData={liveTrainData || journey} 
+        isLoading={isLiveLoading || isLoading} 
+        isError={isLiveError || isError} 
+        errorMessage={(liveError as any)?.message || (error as any)?.message}
+        activeGpsProgress={progress}
+        isBoarded={isBoarded}
+      />
       {isTracking && !isGpsPanelOpen && (
         <TouchableOpacity 
           style={styles.collapsedGpsBtn} 
