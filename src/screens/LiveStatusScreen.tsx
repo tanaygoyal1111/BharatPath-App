@@ -630,6 +630,9 @@ export default function LiveStatusScreen() {
   const [confidence, setConfidence] = useState<Confidence>('LOW');
   const [layoutOffsets, setLayoutOffsets] = useState<{ [key: number]: number }>({});
   
+  const trackingStations = journey?.stations || liveTrainData?.stations || [];
+  const trackingTrainName = journey?.trainName || liveTrainData?.trainName || 'Your train';
+
   // Hybrid Tracking State
   const [isBoarded, setIsBoarded] = useState(false);
   const [showLocationMismatchModal, setShowLocationMismatchModal] = useState(false);
@@ -775,39 +778,6 @@ export default function LiveStatusScreen() {
   const [isProximityEnabled, setIsProximityEnabled] = useState(false);
   const [alertTriggered, setAlertTriggered] = useState(false);
 
-  useEffect(() => {
-    if (!isBoarded || !isProximityEnabled || !journey?.endTime || !journey?.startTime) return;
-
-    const scheduleSmartAlerts = async () => {
-      await Notifications.cancelAllScheduledNotificationsAsync();
-      const now = Date.now();
-      const oneHourBeforeMs = journey.endTime - (60 * 60 * 1000);
-      const halfWayMs = journey.startTime + ((journey.endTime - journey.startTime) / 2);
-
-      if (oneHourBeforeMs > now) {
-        await Notifications.scheduleNotificationAsync({
-          content: { 
-            title: 'Wakey Wakey! ⏰🚉', 
-            body: 'Your station arrives in exactly 60 minutes! Pack your chargers, check under the seat, and get ready.', 
-            sound: true 
-          },
-          trigger: { seconds: Math.floor((oneHourBeforeMs - now) / 1000) } as any,
-        });
-      }
-      if (halfWayMs > now) {
-        await Notifications.scheduleNotificationAsync({
-          content: { 
-            title: "Ooooh, we're halfway there! 🎶", 
-            body: "You've officially conquered 50% of your journey. Perfect time for a quick chai break! ☕" 
-          },
-          trigger: { seconds: Math.floor((halfWayMs - now) / 1000) } as any,
-        });
-      }
-    };
-    scheduleSmartAlerts();
-    return () => { Notifications.cancelAllScheduledNotificationsAsync(); };
-  }, [isBoarded, isProximityEnabled, journey]);
-  
   const scrollRef = useRef<ScrollView>(null);
   const lastUpdateRef = useRef<number>(0);
   const lastLocationRef = useRef<{lat: number, lng: number} | null>(null);
@@ -878,11 +848,18 @@ export default function LiveStatusScreen() {
 
   useEffect(() => {
     if (jState === 'COMPLETED') {
-      AsyncStorage.removeItem('alert_triggered');
+      const teardownJourney = async () => {
+        await AsyncStorage.removeItem('alert_triggered');
+        // Forcefully kill the GPS engine and Proximity toggle
+        setIsBoarded(false);
+        setIsProximityEnabled(false);
+        await AsyncStorage.removeItem('proximity_alerts_enabled');
+      };
+      teardownJourney();
     }
   }, [jState]);
 
-  // 3. Base State Determination
+  // 3. Base State Determination & Garbage Collection
   useEffect(() => {
     if (isLoading && !journey) {
       setJState('LOADING');
@@ -891,7 +868,25 @@ export default function LiveStatusScreen() {
     if (!journey) return;
 
     const now = Date.now();
-    // Assuming backend returns startTime / endTime in epoch ms
+    const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+
+    // GARBAGE COLLECTION: If the journey ended more than 24 hours ago, purge it.
+    if (journey.endTime && now > (journey.endTime + TWENTY_FOUR_HOURS_MS)) {
+      const purgeStaleData = async () => {
+        await AsyncStorage.multiRemove([
+          'last_tracked_pnr',
+          'journey_cache',
+          'alert_triggered',
+          'proximity_alerts_enabled'
+        ]);
+        setActivePnr(null); // Reset the screen to Search UI
+        setIsTracking(false);
+      };
+      purgeStaleData();
+      return; // Exit early, do not set jState
+    }
+
+    // Standard State Evaluation
     if (now < journey.startTime) jState !== 'GPS_OFF' && setJState('UPCOMING');
     else if (now > journey.endTime) jState !== 'GPS_OFF' && setJState('COMPLETED');
     else {
@@ -988,8 +983,8 @@ export default function LiveStatusScreen() {
 
   const handleLocationUpdate = useCallback(
     async (location: Location.LocationObject) => {
-      const trackingStations = liveTrainData?.stations || journey?.stations;
-      if (!trackingStations || trackingStations.length === 0) return;
+      const activeStations = journey?.stations || liveTrainData?.stations;
+      if (!activeStations || activeStations.length === 0) return;
 
       const now = Date.now();
       // Throttling: Return early if < 3s since last handled update
@@ -1010,7 +1005,7 @@ export default function LiveStatusScreen() {
         lng: location.coords.longitude,
       });
 
-      const stations = trackingStations;
+      const stations = activeStations;
       let minRouteDist = Infinity;
       let nearestIdx = 0;
 
@@ -1046,27 +1041,41 @@ export default function LiveStatusScreen() {
         stations[Math.min(nearestIdx + 1, stations.length - 1)]
       );
 
-      // --- PROXIMITY ALERT ENGINE ---
+      // --- SMART DISTANCE-BASED ALERTS ---
       if (isBoarded && isProximityEnabled && conf !== 'LOW') {
-        const destNode = stations[stations.length - 1];
+        const destNode = activeStations[activeStations.length - 1];
         const distToDest = getDistance(smoothedCoords, destNode);
+        const totalJourneyDist = activeStations[activeStations.length - 1].distance || 1000;
         
+        // 1. Halfway Alert (Distance Based)
+        const hasHalfwayFired = await AsyncStorage.getItem('halfway_alert');
+        if (!hasHalfwayFired && distToDest <= totalJourneyDist / 2 && distToDest > 100) {
+          await Notifications.scheduleNotificationAsync({
+            content: { title: "Ooooh, we're halfway there! 🎶", body: "You've officially conquered 50% of your journey.", sound: true }, trigger: null,
+          });
+          await AsyncStorage.setItem('halfway_alert', 'true');
+        }
+
+        // 2. Wakey Wakey Alert (60km remaining ~ approx 45-60 mins)
+        const hasWakeyFired = await AsyncStorage.getItem('wakey_alert');
+        if (!hasWakeyFired && distToDest <= 60 && distToDest > 15) {
+          await Notifications.scheduleNotificationAsync({
+            content: { title: 'Wakey Wakey! ⏰🚉', body: `${trackingTrainName} is approx 60km from your destination. Time to pack up!`, sound: true }, trigger: null,
+          });
+          await AsyncStorage.setItem('wakey_alert', 'true');
+        }
+        
+        // 3. Arrival Alert (10km remaining)
         if (distToDest < 10 && !alertTriggered) {
           const nowMs = Date.now();
           if (nowMs - lastAlertTimeRef.current > 60000) {
             lastAlertTimeRef.current = nowMs;
-            
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            Notifications.scheduleNotificationAsync({
-              content: {
-                title: 'Arrival Alert 🚆',
-                body: 'You are near your destination station!',
-              },
-              trigger: null,
+            await Notifications.scheduleNotificationAsync({
+              content: { title: 'Arrival Alert 🚆', body: 'You are arriving shortly! Please prepare to deboard.', sound: true }, trigger: null,
             });
-
             setAlertTriggered(true);
-            AsyncStorage.setItem('alert_triggered', 'true');
+            await AsyncStorage.setItem('alert_triggered', 'true');
           }
         }
       }
@@ -1085,7 +1094,7 @@ export default function LiveStatusScreen() {
         };
       });
     },
-    [journey, liveTrainData, smoothLocation]
+    [journey, liveTrainData, isBoarded, isProximityEnabled, alertTriggered, smoothLocation]
   );
 
   // 5. Auto Scroll removed for manual control via FAB

@@ -226,21 +226,28 @@ export default function OfflineDashboard({ onHelpPress }: { onHelpPress?: () => 
   let nextHaltCode = "---";
 
   if (!isUpcoming && cachedJourney && cachedJourney.stations && cachedJourney.stations.length > 0) {
-    const now = new Date().getTime();
-    const lastKnownDelayMins = parseInt(cachedJourney.delayInMins || '0', 10);
-    const delayInMilliseconds = lastKnownDelayMins * 60 * 1000;
+    // 1. Find the index of the exact last station the API confirmed before going offline
+    let currentIndex = 0;
+    if (cachedJourney.currentStationCode) {
+      const foundIdx = cachedJourney.stations.findIndex((s: any) => s.code === cachedJourney.currentStationCode);
+      if (foundIdx !== -1) {
+        currentIndex = foundIdx;
+      }
+    }
 
-    const upcomingStation = cachedJourney.stations.find((station: any) => {
-      if (!station.schDeparture) return false;
-      const scheduledTime = new Date(station.schDeparture).getTime();
-      const adjustedDepartureTime = scheduledTime + delayInMilliseconds; 
-      return adjustedDepartureTime > now;
+    // 2. Search forward from the last known index to find the next Junction
+    // We look for 'JN' in the code, or 'JUNCTION' / 'JN' in the name
+    const nextJunction = cachedJourney.stations.slice(currentIndex + 1).find((s: any) => {
+      const codeStr = s.code?.toUpperCase() || '';
+      const nameStr = s.name?.toUpperCase() || '';
+      return codeStr.endsWith('JN') || nameStr.includes('JUNCTION') || nameStr.endsWith('JN');
     });
     
-    if (upcomingStation) {
-      nextHaltName = upcomingStation.name?.toUpperCase() || '';
-      nextHaltCode = upcomingStation.code || '';
+    if (nextJunction) {
+      nextHaltName = nextJunction.name?.toUpperCase() || '';
+      nextHaltCode = nextJunction.code || '';
     } else {
+      // Fallback: If no junctions are left, just show the final destination
       nextHaltName = cachedJourney.destination?.name?.toUpperCase() || 'ARRIVED';
       nextHaltCode = cachedJourney.destination?.code || '';
     }
